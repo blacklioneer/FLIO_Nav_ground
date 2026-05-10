@@ -23,7 +23,7 @@ def generate_launch_description():
             ['cat ', launch.substitutions.LaunchConfiguration('model')]),
         value_type=str)
         
-    # 状态发布节点 (千万不能注释这个！它负责解析 URDF 并发布 base_link 等 TF 坐标关系)
+    # 状态发布节点 (负责解析 URDF 并发布 base_link 等 TF 坐标关系)
     robot_state_publisher_node = launch_ros.actions.Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -48,6 +48,6 @@ def generate_launch_description():
         #joint_state_publisher_node,
         robot_state_publisher_node,
         
-        # 3. 从最终的启动列表中移除 RViz 节点
+        # 3. 中移除 RViz 节点
         # rviz_node
     ])

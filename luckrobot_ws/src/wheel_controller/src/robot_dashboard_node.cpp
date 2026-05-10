@@ -54,7 +54,7 @@ public:
                                      msg->name.find("danger_command") != std::string::npos);
 
                 // ==========================================
-                // 🔥 逻辑调整：10秒周期，0.1秒采样窗口
+                // 10秒周期，0.1秒采样窗口
                 // ==========================================
                 if (is_wheel_pkg && msg->level == rcl_interfaces::msg::Log::INFO) {
                     auto now = this->now();
@@ -183,7 +183,7 @@ private:
             for (char wc : word) {
                 int cy, cx;
                 getyx(stdscr, cy, cx);
-                (void)cy; // 🔥 修复编译警告：消耗掉未使用的 cy 变量
+                (void)cy; // 消耗掉未使用的 cy 变量
                 if (cx >= max_right_x - 3) {
                     printw("...");
                     stop_printing = true;
@@ -207,7 +207,7 @@ private:
                 
                 int cy, cx;
                 getyx(stdscr, cy, cx);
-                (void)cy; // 🔥 修复编译警告
+                (void)cy; 
                 if (cx >= max_right_x - 3) {
                     attron(COLOR_PAIR(1)); printw("..."); attroff(COLOR_PAIR(1));
                     stop_printing = true;

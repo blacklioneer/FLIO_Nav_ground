@@ -34,7 +34,7 @@ def generate_launch_description():
                                              description='Full path to map file to load'),
         launch.actions.DeclareLaunchArgument('params_file', default_value=nav2_param_path,
                                              description='Full path to param file to load'),
-        # 【新增】：声明 use_rviz1 参数，明确告诉用户这个参数的作用
+        # 声明 use_rviz1 参数，明确告诉用户这个参数的作用
         launch.actions.DeclareLaunchArgument('use_rviz1', default_value='False',
                                              description='Whether to start RViz2 on the robot (default: False for headless Jetson)'),
 
@@ -69,7 +69,7 @@ def generate_launch_description():
         ),
 
         # =========================================================
-        # 3. 启动 RViz2 (带有条件判断：只有 use_rviz:=True 时才启动)
+        # 3. 启动 RViz2 (带有条件判断：只有 use_rviz1:=True 时才启动)
         # =========================================================
         Node(
             package='rviz2',
@@ -78,7 +78,7 @@ def generate_launch_description():
             arguments=['-d', rviz_config_dir],
             parameters=[{'use_sim_time': use_sim_time}],
             output='screen',
-            # 【新增】：条件锁！如果用户没传 use_rviz1:=True，这个 Node 直接被抛弃，不会运行
+            # 条件锁！如果没传 use_rviz1:=True，不会运行
             condition=IfCondition(use_rviz1)
         ),
     ])

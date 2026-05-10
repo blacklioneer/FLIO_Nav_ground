@@ -157,6 +157,6 @@ def generate_launch_description():
         # static_tf_imulink2baselink,
         static_tf_base_center,
         global_localization_node,
-        # pointcloud_transformer_node
+        # pointcloud_transformer_node #这个节点是3d导航用的 我这个项目是2d的所以注释掉且压缩为laserscan
         pointcloud_to_laserscan_node
     ])

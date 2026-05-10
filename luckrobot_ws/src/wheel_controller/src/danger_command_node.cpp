@@ -52,7 +52,7 @@ public:
             std::chrono::milliseconds(200),
             std::bind(&DangerCommandNode::check_and_send, this));
 
-        // 🔥 [核心优化] 异步初始化定时器：不再阻塞构造函数，后台每 2 秒尝试一次连接
+        // 异步初始化定时器：不再阻塞构造函数，后台每 2 秒尝试一次连接
         init_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(RETRY_WAIT_MS),
             std::bind(&DangerCommandNode::async_init_serial, this));
@@ -67,7 +67,7 @@ public:
     }
 
 private:
-    // 🔥 [核心优化] 后台异步重连逻辑
+    // 后台异步重连逻辑
     void async_init_serial() {
         // 如果已经连上，直接返回
         if (serial_fd_ >= 0) return;
@@ -99,7 +99,7 @@ private:
 
     // 串口底层初始化
     bool init_serial() {
-        // 🔥 [核心优化] 增加 O_NDELAY 标志。
+        // 增加 O_NDELAY 标志。
         // CH340 经常会因为没有载波信号导致 open() 函数死锁挂起。O_NDELAY 强制立刻打开！
         serial_fd_ = open(SERIAL_PORT, O_RDWR | O_NOCTTY | O_NDELAY);
         if (serial_fd_ < 0) {
@@ -163,7 +163,7 @@ private:
         
         if (sent != cmd_len) {
             RCLCPP_ERROR(this->get_logger(), "⚠️ 指令发送失败，可能是USB断开！触发重新连接...");
-            // 🔥 [核心优化] 发送失败直接关闭文件描述符，并在后台重新启动重连定时器
+            // 发送失败直接关闭文件描述符，并在后台重新启动重连定时器
             close(serial_fd_);
             serial_fd_ = -1;
             if (init_timer_) {

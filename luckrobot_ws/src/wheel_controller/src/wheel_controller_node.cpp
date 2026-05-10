@@ -88,7 +88,7 @@ void signal_handler(int signum);
 bool send_sensor_command(const uint8_t* cmd, int cmd_len);
 bool read_sensor_response(uint8_t sensor_id, double& distance, bool& is_dangerous, std::string& error_msg);
 double parse_sensor_distance(uint8_t dh, uint8_t dl);
-// 新增：格式化十六进制字符串 【修改】
+// 格式化十六进制字符串 
 std::string to_hex_string(uint8_t val);
 
 // ==================== 辅助函数：16进制打印 ====================
