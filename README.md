@@ -1,6 +1,6 @@
 # 家庭服务机器人
 ## 1.项目介绍
-主控基于两台Jetson orin nano super8G，一台运行导航与语音等，另外一台运行VLA，通过Ros作为通讯桥梁;Cpp开发,humble版本;导航基于Mid360s;双臂基于huggingface的lerobot;PCB与CNC来源立创免费打样。
+主控基于两台Jetson orin nano super8G，一台运行导航与语音识别等，另外一台运行VLA，通过Ros作为通讯桥梁;Cpp开发,humble版本;导航基于Mid360s;双臂基于huggingface的lerobot;PCB与CNC来源立创免费打样。
 ## 2.使用说明🌟🌟🌟
 可结合本人blibli此系列视频进行操作(未更新)，视频链接：[jetson nano部署fastlio2建图加定位，A*规划导航](https://www.bilibili.com/video/BV1tbQGBkE4F?vd_source=956043e91d9fa045c1e7c746411b5102)  
 借鉴项目(现在已完成全部环境部署运行，导航完成，遥操训练正在制作，零件等全由本人DIY )：  
