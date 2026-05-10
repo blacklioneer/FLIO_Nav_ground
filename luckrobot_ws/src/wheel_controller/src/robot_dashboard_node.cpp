@@ -9,6 +9,8 @@
 #include <string>
 #include <chrono>
 #include <deque>
+#include <algorithm>
+#include <cctype>
 
 class RobotDashboardNode : public rclcpp::Node {
 public:
@@ -43,34 +45,32 @@ public:
         rosout_sub_ = this->create_subscription<rcl_interfaces::msg::Log>(
             "/rosout", 20,
             [this](const rcl_interfaces::msg::Log::SharedPtr msg) {
-                // 忽略 DEBUG 级别日志
                 if (msg->level < rcl_interfaces::msg::Log::INFO) { return; }
                 
                 std::lock_guard<std::mutex> lock(data_mutex_);
 
-                // ==========================================
-                // 🔥 智能日志过滤器：限频与警报穿透
-                // ==========================================
                 bool is_wheel_pkg = (msg->name.find("wheel_controller") != std::string::npos || 
                                      msg->name.find("lead_screw") != std::string::npos ||
                                      msg->name.find("danger_command") != std::string::npos);
 
-                // 只有当它是底层硬件的 INFO 日志时，才进行 10 秒限频拦截
+                // ==========================================
+                // 🔥 逻辑调整：10秒周期，0.1秒采样窗口
+                // ==========================================
                 if (is_wheel_pkg && msg->level == rcl_interfaces::msg::Log::INFO) {
                     auto now = this->now();
-                    if ((now - last_wheel_log_time_).seconds() < 10.0) {
-                        return; // 丢弃频繁的底层运行日志，保持屏幕清爽
+                    double diff = (now - last_wheel_log_time_).seconds();
+                    
+                    if (diff > 10.0) { // 改为 10 秒
+                        window_open_ = true;
+                        last_wheel_log_time_ = now;
+                        diff = 0.0;
                     }
-                    last_wheel_log_time_ = now;
+                    
+                    if (window_open_ && diff > 0.1) { window_open_ = false; }
+                    if (!window_open_) { return; }
                 }
-                // 注意：一旦爆出 WARN 或 ERROR，它会无视上面的 if，直接穿透显示！
-                // ==========================================
 
                 std::string log_str = "[" + msg->name + "] " + msg->msg;
-                if (log_str.length() > 86) {
-                    log_str = log_str.substr(0, 83) + "...";
-                }
-                
                 sys_logs_.push_back({msg->level, log_str});
                 if (sys_logs_.size() > 11) {
                     sys_logs_.pop_front();
@@ -97,7 +97,9 @@ private:
     float right_dist_ = 65.0;
     std::string current_task_ = "等待调度指令...";
     
-    rclcpp::Time last_wheel_log_time_{0, 0, RCL_ROS_TIME}; // 用于限频记录时间
+    rclcpp::Time last_wheel_log_time_{0, 0, RCL_ROS_TIME}; 
+    bool window_open_ = false; 
+
     std::deque<std::pair<int8_t, std::string>> sys_logs_;
 
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr screw_sub_;
@@ -114,13 +116,12 @@ private:
         curs_set(0);          
         start_color();        
 
-        // 白底亮色主题调色板
-        init_pair(1, COLOR_BLACK, COLOR_WHITE);   // INFO 黑色
-        init_pair(2, COLOR_GREEN, COLOR_WHITE);   // 成功 绿色
-        init_pair(3, COLOR_RED, COLOR_WHITE);     // ERROR 红色
-        init_pair(4, COLOR_BLUE, COLOR_WHITE);    // 边框 蓝色
-        init_pair(5, COLOR_MAGENTA, COLOR_WHITE); // 强调 紫色
-        init_pair(6, COLOR_MAGENTA, COLOR_WHITE); // WARN 警告(在白底上用紫色代替黄色最醒目)
+        init_pair(1, COLOR_BLACK, COLOR_WHITE);   
+        init_pair(2, COLOR_GREEN, COLOR_WHITE);   
+        init_pair(3, COLOR_RED, COLOR_WHITE);     
+        init_pair(4, COLOR_BLUE, COLOR_WHITE);    
+        init_pair(5, COLOR_MAGENTA, COLOR_WHITE); 
+        init_pair(6, COLOR_YELLOW, COLOR_WHITE);  
 
         bkgd(COLOR_PAIR(1)); 
     }
@@ -144,6 +145,82 @@ private:
         attroff(COLOR_PAIR(4));
     }
 
+    void print_colorized_log(int y, int x, const std::string& prefix, int prefix_color, const std::string& log_line, int max_right_x) {
+        move(y, x);
+        attron(COLOR_PAIR(prefix_color) | A_BOLD);
+        printw("%s ", prefix.c_str());
+        attroff(COLOR_PAIR(prefix_color) | A_BOLD);
+
+        std::string word = "";
+        bool stop_printing = false;
+
+        auto print_word = [&]() {
+            if (word.empty() || stop_printing) { return; }
+            
+            std::string lw = word;
+            std::transform(lw.begin(), lw.end(), lw.begin(), ::tolower);
+            
+            int color = 1; int attr = A_NORMAL;
+
+            if (lw.find("error") != std::string::npos || lw.find("fail") != std::string::npos || 
+                lw.find("fatal") != std::string::npos || lw == "false" || lw.find("timeout") != std::string::npos) {
+                color = 3; attr = A_BOLD;
+            } else if (lw.find("warn") != std::string::npos || lw.find("alert") != std::string::npos) {
+                color = 6; attr = A_BOLD;
+            } else if (lw.find("success") != std::string::npos || lw.find("ok") != std::string::npos || 
+                       lw == "true" || lw.find("connect") != std::string::npos || lw == "up" || lw.find("start") != std::string::npos) {
+                color = 2; attr = A_BOLD;
+            } else if (lw == "ip" || lw == "return" || lw == "exit" || lw == "node" || 
+                       lw == "topic" || lw == "port" || lw == "msg" || lw == "mac" || lw == "ros" || lw == "position" || lw == "sensor") {
+                color = 5; attr = A_BOLD;
+            } else if (std::any_of(lw.begin(), lw.end(), ::isdigit) || lw == "info" || lw == "data") {
+                color = 4; attr = A_BOLD; 
+            }
+
+            if (attr != A_NORMAL) { attron(attr); }
+            attron(COLOR_PAIR(color));
+            
+            for (char wc : word) {
+                int cy, cx;
+                getyx(stdscr, cy, cx);
+                (void)cy; // 🔥 修复编译警告：消耗掉未使用的 cy 变量
+                if (cx >= max_right_x - 3) {
+                    printw("...");
+                    stop_printing = true;
+                    break;
+                }
+                printw("%c", wc);
+            }
+            
+            attroff(COLOR_PAIR(color));
+            if (attr != A_NORMAL) { attroff(attr); }
+            word.clear();
+        };
+
+        for (char c : log_line) {
+            if (stop_printing) break;
+            
+            if (c == ' ' || c == '[' || c == ']' || c == ':' || c == ',' || c == '=' || 
+                c == '(' || c == ')' || c == '/' || c == '-' || c == '>' || c == '<') {
+                print_word();
+                if (stop_printing) break;
+                
+                int cy, cx;
+                getyx(stdscr, cy, cx);
+                (void)cy; // 🔥 修复编译警告
+                if (cx >= max_right_x - 3) {
+                    attron(COLOR_PAIR(1)); printw("..."); attroff(COLOR_PAIR(1));
+                    stop_printing = true;
+                    break;
+                }
+                attron(COLOR_PAIR(1)); printw("%c", c); attroff(COLOR_PAIR(1));
+            } else {
+                word += c;
+            }
+        }
+        if (!stop_printing) print_word(); 
+    }
+
     void update_ui() {
         std::lock_guard<std::mutex> lock(data_mutex_);
         erase(); 
@@ -153,6 +230,7 @@ private:
         
         int layout_width = 95;  
         int layout_height = 24; 
+        
         int start_y = (max_y - layout_height) / 2;
         int start_x = (max_x - layout_width) / 2;
         if (start_y < 0) { start_y = 0; }
@@ -167,7 +245,7 @@ private:
         attron(A_BOLD | COLOR_PAIR(1));
         mvprintw(start_y + 4, start_x + 2, "🎯 当前目标:");
         std::string display_task = current_task_;
-        if(display_task.length() > 26) display_task = display_task.substr(0, 23) + "...";
+        if(display_task.length() > 26) { display_task = display_task.substr(0, 23) + "..."; }
         attron(COLOR_PAIR(5));
         mvprintw(start_y + 6, start_x + 2, "%s", display_task.c_str());
         attroff(COLOR_PAIR(5));
@@ -178,14 +256,13 @@ private:
         float abs_height = screw_pos_ + 662.0f;
         attron(A_BOLD | COLOR_PAIR(1));
         mvprintw(start_y + 4, start_x + 34, "📏 相对 Z:");
-        attron(COLOR_PAIR(5)); printw("%6.1f mm", screw_pos_); attroff(COLOR_PAIR(5));
+        attron(COLOR_PAIR(4)); printw("%6.1f mm", screw_pos_); attroff(COLOR_PAIR(4));
         mvprintw(start_y + 5, start_x + 34, "📐 离地 H:");
         attron(COLOR_PAIR(2)); printw("%6.1f mm", abs_height); attroff(COLOR_PAIR(2));
 
         int screw_bar = (int)((-screw_pos_ / 462.0) * 12);
         if (screw_bar < 0) { screw_bar = 0; }
         if (screw_bar > 12) { screw_bar = 12; }
-        
         mvprintw(start_y + 7, start_x + 34, "行程[");
         attron(COLOR_PAIR(4));
         for(int i=0; i<12; i++) { printw(i < screw_bar ? "■" : " "); }
@@ -196,7 +273,6 @@ private:
         // ==================== 3：轮侧雷达 ====================
         draw_box(start_y + 2, start_x + 63, 8, 32, " 🛡️ 轮侧雷达 ", 13);
         attron(A_BOLD | COLOR_PAIR(1));
-        
         mvprintw(start_y + 4, start_x + 65, "L:");
         if (left_dist_ >= 64.9) {
             attron(COLOR_PAIR(2)); printw(" ≥65.0 mm [✅]"); attroff(COLOR_PAIR(2));
@@ -205,7 +281,6 @@ private:
         } else {
             attron(COLOR_PAIR(2)); printw("%5.1f mm [✅]", left_dist_); attroff(COLOR_PAIR(2));
         }
-
         mvprintw(start_y + 6, start_x + 65, "R:");
         if (right_dist_ >= 64.9) {
             attron(COLOR_PAIR(2)); printw(" ≥65.0 mm [✅]"); attroff(COLOR_PAIR(2));
@@ -218,31 +293,20 @@ private:
 
         // ==================== 4：系统日志 ====================
         draw_box(start_y + 10, start_x, 14, 95, " 📜 System Logs / 系统全局日志 ", 31);
-        
         int log_y = start_y + 12;
+        int max_right_boundary = start_x + 95; 
         for (const auto& log : sys_logs_) {
-            mvprintw(log_y, start_x + 2, ">");
-            
-            if (log.first >= rcl_interfaces::msg::Log::FATAL) {
-                attron(COLOR_PAIR(3) | A_BOLD | A_UNDERLINE | A_BLINK); 
-                mvprintw(log_y, start_x + 4, "💀 %s", log.second.c_str());
-                attroff(COLOR_PAIR(3) | A_BOLD | A_UNDERLINE | A_BLINK);
-            } else if (log.first >= rcl_interfaces::msg::Log::ERROR) {
-                attron(COLOR_PAIR(3) | A_BOLD); 
-                mvprintw(log_y, start_x + 4, "❌ %s", log.second.c_str());
-                attroff(COLOR_PAIR(3) | A_BOLD);
+            std::string prefix; int prefix_color;
+            if (log.first >= rcl_interfaces::msg::Log::ERROR) {
+                prefix = "❌"; prefix_color = 3; 
             } else if (log.first >= rcl_interfaces::msg::Log::WARN) {
-                attron(COLOR_PAIR(6) | A_BOLD); // 紫色高亮
-                mvprintw(log_y, start_x + 4, "⚠️ %s", log.second.c_str());
-                attroff(COLOR_PAIR(6) | A_BOLD);
+                prefix = "⚠️"; prefix_color = 6; 
             } else {
-                attron(COLOR_PAIR(1)); // 黑色常规
-                mvprintw(log_y, start_x + 4, "💬 %s", log.second.c_str());
-                attroff(COLOR_PAIR(1));
+                prefix = "💬"; prefix_color = 1;
             }
+            print_colorized_log(log_y, start_x + 2, prefix, prefix_color, log.second, max_right_boundary);
             log_y++;
         }
-
         refresh();
     }
 };
