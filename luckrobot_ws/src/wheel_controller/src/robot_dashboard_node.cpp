@@ -35,8 +35,9 @@ public:
                 }
             });
 
+        // 🔥 优化：直接订阅语音中枢的输出，实现“话音刚落，屏幕秒刷”的极致体验
         task_sub_ = this->create_subscription<std_msgs::msg::String>(
-            "/vla_task_trigger", 10,
+            "/user_voice_cmd", 10,
             [this](const std_msgs::msg::String::SharedPtr msg) {
                 std::lock_guard<std::mutex> lock(data_mutex_);
                 current_task_ = msg->data;
@@ -53,14 +54,12 @@ public:
                                      msg->name.find("lead_screw") != std::string::npos ||
                                      msg->name.find("danger_command") != std::string::npos);
 
-                // ==========================================
-                // 10秒周期，0.1秒采样窗口
-                // ==========================================
+                // 10秒周期，0.1秒连发窗口
                 if (is_wheel_pkg && msg->level == rcl_interfaces::msg::Log::INFO) {
                     auto now = this->now();
                     double diff = (now - last_wheel_log_time_).seconds();
                     
-                    if (diff > 10.0) { // 改为 10 秒
+                    if (diff > 10.0) { 
                         window_open_ = true;
                         last_wheel_log_time_ = now;
                         diff = 0.0;
@@ -183,7 +182,7 @@ private:
             for (char wc : word) {
                 int cy, cx;
                 getyx(stdscr, cy, cx);
-                (void)cy; // 消耗掉未使用的 cy 变量
+                (void)cy; 
                 if (cx >= max_right_x - 3) {
                     printw("...");
                     stop_printing = true;
@@ -221,6 +220,23 @@ private:
         if (!stop_printing) print_word(); 
     }
 
+    // 🔥 核心底层：UTF-8 安全截断算法 (防乱码绝杀)
+    std::string safe_utf8_substr(const std::string& str, size_t max_bytes) {
+        if (str.length() <= max_bytes) return str;
+        size_t len = 0;
+        while (len < max_bytes) {
+            unsigned char c = str[len];
+            size_t char_len = 1; // 默认 ASCII 占 1 字节
+            if ((c & 0xE0) == 0xC0) char_len = 2;
+            else if ((c & 0xF0) == 0xE0) char_len = 3; // 汉字通常占 3 字节
+            else if ((c & 0xF8) == 0xF0) char_len = 4;
+            
+            if (len + char_len > max_bytes) break; // 超过限制，安全抛弃该字符
+            len += char_len;
+        }
+        return str.substr(0, len) + "...";
+    }
+
     void update_ui() {
         std::lock_guard<std::mutex> lock(data_mutex_);
         erase(); 
@@ -244,8 +260,10 @@ private:
         draw_box(start_y + 2, start_x, 8, 31, " 🗺️ 导航任务 ", 13);
         attron(A_BOLD | COLOR_PAIR(1));
         mvprintw(start_y + 4, start_x + 2, "🎯 当前目标:");
-        std::string display_task = current_task_;
-        if(display_task.length() > 26) { display_task = display_task.substr(0, 23) + "..."; }
+        
+        // 使用安全的 UTF-8 截断，最大允许约 13 个汉字 (39 字节)，防止撑爆框
+        std::string display_task = safe_utf8_substr(current_task_, 39);
+        
         attron(COLOR_PAIR(5));
         mvprintw(start_y + 6, start_x + 2, "%s", display_task.c_str());
         attroff(COLOR_PAIR(5));

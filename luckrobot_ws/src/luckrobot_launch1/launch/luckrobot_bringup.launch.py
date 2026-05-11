@@ -4,7 +4,7 @@ from launch.actions import IncludeLaunchDescription, ExecuteProcess, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
 from launch.event_handlers import OnProcessExit
-import launch_ros.actions  # 🔥 引入 Node 动作
+import launch_ros.actions  
 from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
@@ -13,14 +13,12 @@ def generate_launch_description():
     # 阶段 1：底层硬件与传感器 (事件级错峰启动)
     # ==========================================
     
-    # [事件 1] T=0s，立即拉起底盘控制(这个Launch里面包含了丝杠、车轮、警报和状态)
     wheel_control_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare('luckrobot_launch1'), 'launch', 'wheel_control_launch.py'])
         )
     )
 
-    # [事件 2] T=2s，延时错峰拉起 Robot Display
     robot_display_event = TimerAction(
         period=2.0,
         actions=[
@@ -33,7 +31,6 @@ def generate_launch_description():
         ]
     )
 
-    # [事件 3] T=4s，延时错峰拉起 Livox 雷达
     livox_driver_event = TimerAction(
         period=4.0,
         actions=[
@@ -75,7 +72,7 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 阶段 3 & 4 & 5：基于物理移动结束事件的高阶算法错峰拉起
+    # 阶段 3 & 4 & 5 & 6：高阶算法与宏观控制错峰拉起
     # ==========================================
     
     open3d_loc_launch = IncludeLaunchDescription(
@@ -90,11 +87,20 @@ def generate_launch_description():
         )
     )
 
-    # 🔥 新增：中央导航调度节点
+    # 中央导航调度节点
     nav_manager_node = launch_ros.actions.Node(
         package="wheel_controller",
         executable="nav_manager_node",
         name="nav_manager_node",
+        output="screen",
+        parameters=[{"use_sim_time": False}]
+    )
+
+    # 🔥 新增：VLA 语音交互中枢节点
+    voice_cmd_node = launch_ros.actions.Node(
+        package="voice_controller",
+        executable="voice_cmd_node",
+        name="voice_cmd_node",
         output="screen",
         parameters=[{"use_sim_time": False}]
     )
@@ -118,13 +124,23 @@ def generate_launch_description():
                     ]
                 ),
 
-                # 【事件 7】：等待 35 秒 (20秒给Open3D + 15秒给Nav2启动Action服务)，压轴拉起中央调度节点！
-                LogInfo(msg="============ [等待中] 开启 35 秒终极调度节点倒计时 ============"),
+                # 【事件 7】：等待 35 秒，压轴拉起中央调度节点！
+                LogInfo(msg="============ [等待中] 开启 35 秒调度节点倒计时 ============"),
                 TimerAction(
                     period=35.0,
                     actions=[
-                        LogInfo(msg="============ [事件 7] Nav2 服务已全面就绪！压轴拉起中央导航调度节点 ============"),
+                        LogInfo(msg="============ [事件 7] Nav2 就绪！拉起中央导航调度节点 ============"),
                         nav_manager_node
+                    ]
+                ),
+
+                # 🔥 【事件 8】：等待 40 秒，大轴登场，打通最后一块 VLA 拼图！
+                LogInfo(msg="============ [等待中] 开启 40 秒语音唤醒倒计时 ============"),
+                TimerAction(
+                    period=40.0,
+                    actions=[
+                        LogInfo(msg="============ [事件 8] 系统闭环完成！正式启动 VLA 语音识别中枢 🎙️ ============"),
+                        voice_cmd_node
                     ]
                 )
             ]

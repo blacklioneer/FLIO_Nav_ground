@@ -9,7 +9,7 @@
 #include <mutex>
 #include <cmath>
 
-// 限位：0 ~ -462mm
+// 限位：0 ~ -462mm (最底端距离地面绝对高度 23cm)
 const float MAX_LIMIT = 0.0f;
 const float MIN_LIMIT = -462.0f;
 
@@ -62,8 +62,8 @@ public:
         pub_ = this->create_publisher<std_msgs::msg::Float32>("/lead_screw/current_position", 10);
         std::thread(&LeadScrewMotorNode::homing, this).detach();
 
-        RCLCPP_INFO(this->get_logger(), "✅ 丝杠节点(精准状态轮询版)");
-        RCLCPP_INFO(this->get_logger(), "📏 限位：0 ~ -462mm");
+        RCLCPP_INFO(this->get_logger(), "✅ 丝杠节点(绝对寻址+状态轮询版)");
+        RCLCPP_INFO(this->get_logger(), "📏 限位：0(顶端) ~ -462mm(最底端,距地23cm)");
     }
 
 private:
@@ -81,22 +81,19 @@ private:
         } catch (...) { return false; }
     }
 
-    // 仅发送数据的底层函数
     void send(const std::vector<uint8_t>& f) {
         std::lock_guard<std::mutex> lock(serial_mutex_);
         serial_->Write(f);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    // 🔥 发送指令并接收返回值的函数（带超时机制）
     bool send_and_receive(const std::vector<uint8_t>& tx_frame, std::vector<uint8_t>& rx_data, size_t expected_len) {
         std::lock_guard<std::mutex> lock(serial_mutex_);
-        serial_->FlushIOBuffers(); // 清空历史残留数据
+        serial_->FlushIOBuffers(); 
         serial_->Write(tx_frame);
         
         rx_data.clear();
         auto start_time = std::chrono::steady_clock::now();
-        // 500ms 超时等待数据返回
         while (rx_data.size() < expected_len) {
             if (serial_->IsDataAvailable()) {
                 uint8_t byte;
@@ -111,9 +108,8 @@ private:
     }
 
     void homing() {
-        RCLCPP_INFO(this->get_logger(), "🔧 触发回零中...");
+        RCLCPP_INFO(this->get_logger(), "🔧 触发回零中(寻找最高点 0)...");
         
-        // 1. 下发回零启动序列
         std::vector<std::vector<uint8_t>> cmds = {
             build_write_single(SLAVE_ID,0x0200,9), build_write_single(SLAVE_ID,0x1003,6),
             build_write_single(SLAVE_ID,0x1023,2), build_write_multiple(SLAVE_ID,0x1024,2,{(uint16_t)HOMING_SPEED,(uint16_t)(HOMING_SPEED>>16)}),
@@ -121,20 +117,17 @@ private:
         };
         for(auto c:cmds) send(c);
 
-        // 2. 状态轮询指令与期待的正确回复
         std::vector<uint8_t> check_status_cmd = {0x01, 0x03, 0x0B, 0x07, 0x00, 0x02, 0x77, 0xEE};
         std::vector<uint8_t> target_reply = {0x01, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0xFA, 0x33};
         std::vector<uint8_t> rx_buf;
 
         RCLCPP_INFO(this->get_logger(), "🔍 正在高频查询电机内部回零状态...");
 
-        // 🔥 【核心优化】死循环查询状态，查到 00 00 才放行
         bool is_homing_finished = false;
         while (rclcpp::ok() && !is_homing_finished) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 每半秒问一次
+            std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
             
             if (send_and_receive(check_status_cmd, rx_buf, 9)) {
-                // 如果收到的回复与设定的目标帧完全一致
                 if (rx_buf == target_reply) {
                     is_homing_finished = true;
                     RCLCPP_INFO(this->get_logger(), "🎯 收到确认回复！电机彻底回零完成！");
@@ -146,38 +139,50 @@ private:
             }
         }
 
-        // 3. 收到结束状态后，发送停止回零控制字
         RCLCPP_INFO(this->get_logger(), "⏹️ 发送解除回零状态指令...");
         send(build_write_single(SLAVE_ID, 0x0D08, 256));
         
-        // 4. 重置坐标并彻底解锁移动权限
         pos_ = 0.0f; 
         home_done_.store(true);
         publish_pos();
-        RCLCPP_INFO(this->get_logger(), "✅ 丝杠节点已就绪，允许接收移动指令！");
+        RCLCPP_INFO(this->get_logger(), "✅ 丝杠节点已就绪，当前位置: 0.0 mm，允许接收绝对坐标指令！");
     }
 
-    void move(float delta) {
-        // 🔥 【排队挂起逻辑】：收到 ROS 话题后检查是否回零结束。
-        // 如果电机还在回零，本线程会在此死循环等待，直到 homing() 把 home_done_ 设为 true。
+    // 🔥 核心重构：参数变为 target_pos 绝对目标值
+    void move(float target_pos) {
         if (!home_done_.load()) {
-            RCLCPP_INFO(this->get_logger(), "⏳ 收到移动指令(%.1f)，但回零尚未结束，已挂起等待...", delta);
+            RCLCPP_INFO(this->get_logger(), "⏳ 收到前往绝对高度 %.1f 的指令，但系统正在回零，已挂起...", target_pos);
             while (!home_done_.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
-            RCLCPP_INFO(this->get_logger(), "▶️ 等待结束！立即执行堆积的移动指令(%.1f)", delta);
+            RCLCPP_INFO(this->get_logger(), "▶️ 挂起结束！立即前往目标高度 %.1f", target_pos);
         }
 
-        // 获取锁，执行正式的下降动作
         std::lock_guard<std::mutex> lock(move_mutex_);
 
         float curr = pos_.load();
-        float target = curr + delta;
-        if(target > MAX_LIMIT || target < MIN_LIMIT) {
-            RCLCPP_WARN(this->get_logger(), "⚠️ 限位保护：%.1f", target);
+        
+        // 1. 安全限位校验
+        if(target_pos > MAX_LIMIT || target_pos < MIN_LIMIT) {
+            RCLCPP_WARN(this->get_logger(), "⚠️ 超出限位保护：%.1f (允许范围: 0 ~ -462)", target_pos);
             return;
         }
 
+        // 2. 计算本次需要的相对差值 (Delta)
+        float delta = target_pos - curr;
+
+        // 3. 极小位移防死锁逻辑（配合 Launch 文件）
+        if (std::fabs(delta) < 0.1f) {
+            RCLCPP_INFO(this->get_logger(), "ℹ️ 丝杠已在目标高度(%.1f mm)，无需重复动作。", target_pos);
+            // ⚠️ 极其关键：即使不动，也必须打印这句话！
+            // 因为你的 Launch 文件里的 grep 正在死等这句话！不打印会导致 Open3D 永远拉不起！
+            RCLCPP_INFO(this->get_logger(), "📌 位置: %.1f mm", pos_.load());
+            return;
+        }
+
+        RCLCPP_INFO(this->get_logger(), "⚙️ 丝杠运行：当前 %.1f mm -> 目标 %.1f mm (产生位移差: %.1f mm)", curr, target_pos, delta);
+
+        // 4. 将差值转为步数发给伺服电机
         float revs = delta / LEAD;
         int64_t steps = revs * STEPS_PER_REV;
         uint32_t s = (uint32_t)steps;
@@ -190,16 +195,19 @@ private:
         };
         for(auto c:cmds) send(c);
 
-        pos_ = target;
+        pos_ = target_pos;
         publish_pos();
 
+        // 5. 动态计算等待时间，等待物理动作完成
         std::this_thread::sleep_for(std::chrono::milliseconds((int)(std::fabs(delta)*20)+500));
         send(build_write_single(SLAVE_ID,0x0D08,0));
+        
+        // 🔥 这一句将触发 Launch 脚本中的 wait_motor_finish_cmd！
         RCLCPP_INFO(this->get_logger(), "📌 位置: %.1f mm", pos_.load());
     }
 
     void callback(const std_msgs::msg::Float32::SharedPtr msg) {
-        // 创建独立线程去执行，保证就算被 move() 里的 while 挂起，也不会卡死整个 ROS 节点通信
+        // msg->data 现在代表绝对高度目标值
         std::thread(&LeadScrewMotorNode::move, this, msg->data).detach();
     }
 
