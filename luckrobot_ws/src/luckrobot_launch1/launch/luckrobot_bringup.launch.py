@@ -111,13 +111,29 @@ def generate_launch_description():
     voice_cmd_event = TimerAction(
         period=79.0,
         actions=[
-            LogInfo(msg="============ [事件 8] T+79s：系统闭环完成！正式启动 VLA 语音识别中枢 🎙️ ============"),
+            LogInfo(msg="============ [事件 8] T+79s：打通最后一块 VLA 拼图，启动语音节点 ============"),
             launch_ros.actions.Node(
                 package="voice_controller",
                 executable="voice_cmd_node",
                 name="voice_cmd_node",
                 output="screen",
                 parameters=[{"use_sim_time": False}]
+            )
+        ]
+    )
+
+    # 🔥 39秒 + 43秒 = 82秒：真正的大轴！全部启动完毕后，下发开机语音！
+    # 0x0C 对应的十进制是 12
+    startup_voice_event = TimerAction(
+        period=82.0,
+        actions=[
+            LogInfo(msg="============ [事件 9] T+82s：全部系统就绪！下发开机完毕语音播报 📢 ============"),
+            ExecuteProcess(
+                cmd=[
+                    'ros2', 'topic', 'pub', '/voice_prompt', 
+                    'std_msgs/msg/UInt8', '{data: 12}', '--once'
+                ],
+                output='screen'
             )
         ]
     )
@@ -135,5 +151,6 @@ def generate_launch_description():
         open3d_event,
         nav2_event,
         nav_manager_event,
-        voice_cmd_event
+        voice_cmd_event,
+        startup_voice_event  
     ])

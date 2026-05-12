@@ -2,11 +2,12 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/u_int8.hpp> // 🔥 修正：ROS 2 中 UInt8 的头文件叫 u_int8.hpp
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <map>
 #include <string>
 #include <cmath>
-#include <algorithm> // 用于字符串转换大小写
+#include <algorithm>
 #include <cctype>
 
 using NavigateToPose = nav2_msgs::action::NavigateToPose;
@@ -16,18 +17,14 @@ using GoalHandleNav = rclcpp_action::ClientGoalHandle<NavigateToPose>;
 struct Waypoint {
     double x;
     double y;
-    double yaw;         // 机器人的朝向弧度 (0 ~ 3.14)
-    float screw_height; // 丝杠位移高度 (0.0 ~ -462.0)
+    double yaw;         
+    float screw_height; 
 };
 
 class NavManagerNode : public rclcpp::Node {
 public:
     NavManagerNode() : Node("nav_manager_node") {
         
-        // ==========================================
-        // 初始化 20 个目标点坐标字典
-        // 你可以通过 `ros2 topic echo /goal_pose` 在 RViz2 里点选获取真实坐标
-        // ==========================================
         target_locations_["厨房桌子"]   = { 0.0,  0.0,  0., -300.0};
         target_locations_["客厅茶几"]   = { 2.0,  2.0,  0.00, -450.0};
         target_locations_["充电桩"]     = { 3.0,  3.0,  3.00,    0.0};
@@ -49,22 +46,19 @@ public:
         target_locations_["阳台"]       = { 4.0,  7.0, -1.57, -200.0};
         target_locations_["垃圾桶"]     = { 0.5, -1.0,  3.14, -400.0};
 
-        // 创建 Nav2 的动作客户端
         action_client_ = rclcpp_action::create_client<NavigateToPose>(this, "navigate_to_pose");
-
-        // 创建丝杠下发话题
         screw_pub_ = this->create_publisher<std_msgs::msg::Float32>("/lead_screw/displacement", 10);
-
-        // 创建大模型任务触发话题 (发给 10.0.0.51 VLA)
         vla_trigger_pub_ = this->create_publisher<std_msgs::msg::String>("/vla_task_trigger", 10);
+        
+        // 控制语音硬件的话题发布器
+        voice_prompt_pub_ = this->create_publisher<std_msgs::msg::UInt8>("/voice_prompt", 10);
 
-        // 订阅语音文本
         voice_sub_ = this->create_subscription<std_msgs::msg::String>(
             "/user_voice_cmd", 10,
             std::bind(&NavManagerNode::voice_callback, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "🚀 中央调度节点启动成功！(已加载唤醒词 Lucky 拦截系统)");
+        RCLCPP_INFO(this->get_logger(), "🚀 中央调度节点启动成功！(已集成任务语音播报)");
     }
 
 private:
@@ -72,12 +66,12 @@ private:
     rclcpp_action::Client<NavigateToPose>::SharedPtr action_client_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr screw_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vla_trigger_pub_;
+    rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr voice_prompt_pub_; 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr voice_sub_;
     
     std::string current_task_name_;
-    float current_screw_height_target_; // 用于暂存当前任务的丝杠目标高度
+    float current_screw_height_target_; 
 
-    // Yaw(偏航角弧度) 转 四元数 辅助函数
     void yaw_to_quaternion(double yaw, double& qx, double& qy, double& qz, double& qw) {
         qx = 0.0; qy = 0.0;
         qz = std::sin(yaw / 2.0);
@@ -87,44 +81,37 @@ private:
     void voice_callback(const std_msgs::msg::String::SharedPtr msg) {
         std::string command = msg->data;
         
-        // 1. 【新增逻辑】：将收到的整句话转换为小写，方便做不区分大小写的匹配
         std::string lower_command = command;
         std::transform(lower_command.begin(), lower_command.end(), lower_command.begin(),
             [](unsigned char c){ return std::tolower(c); });
 
-        // 2. 【新增逻辑】：唤醒词安检！如果句子里根本没有 "lucky"，直接当没听见，退出处理
         if (lower_command.find("lucky") == std::string::npos) {
-            // 使用 DEBUG 级别，这样平时正常说话聊天时终端不会被警告刷屏
             RCLCPP_DEBUG(this->get_logger(), "🛑 未检测到唤醒词 'Lucky'，忽略日常对话: [%s]", command.c_str());
             return;
         }
 
-        // 只有带着 "Lucky" 的指令才会走到这里
         RCLCPP_INFO(this->get_logger(), "✨ 机器人被唤醒！收到有效指令: [%s]", command.c_str());
 
         bool location_found = false;
         std::string target_name = "";
         Waypoint target_wp;
 
-        // 3. 解析目标点
         for (const auto& location : target_locations_) {
             if (command.find(location.first) != std::string::npos) {
                 location_found = true;
                 target_name = location.first;
                 target_wp = location.second;
-                current_task_name_ = command; // 记录全句指令，后续发给VLA
-                current_screw_height_target_ = target_wp.screw_height; // 暂存目标丝杠高度，留到导航到达后再发
-                break; // 匹配到一个就退出
+                current_task_name_ = command; 
+                current_screw_height_target_ = target_wp.screw_height; 
+                break; 
             }
         }
 
-        // 4. 异常处理：有唤醒词，但没有预设地点
         if (!location_found) {
             RCLCPP_WARN(this->get_logger(), "⚠️ 听到了唤醒词，但未在指令中发现已知的预设地点！小车保持原地不动。");
             return;
         }
 
-        // 5. 正常处理：匹配成功，开始下发动作
         RCLCPP_INFO(this->get_logger(), "🎯 成功解析目标地点: [%s]", target_name.c_str());
         RCLCPP_INFO(this->get_logger(), "   - Nav2 坐标 : X=%.2f, Y=%.2f, Yaw=%.2f", target_wp.x, target_wp.y, target_wp.yaw);
         RCLCPP_INFO(this->get_logger(), "   - 待执行丝杠高度 : %.1f mm (将在导航抵达后执行)", target_wp.screw_height);
@@ -154,14 +141,18 @@ private:
 
         auto send_goal_options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
         
-        // 回调：当导航到达终点或被中断时触发
         send_goal_options.result_callback =
             [this](const GoalHandleNav::WrappedResult & result) {
                 switch (result.code) {
                     case rclcpp_action::ResultCode::SUCCEEDED:
+                    {
                         RCLCPP_INFO(this->get_logger(), "✅ 导航圆满到达目的地！底盘已停稳。");
                         
-                        // 在到达终点后，将暂存的高度下发给丝杠
+                        // 动作2：到达目的地，下发语音 [0x0E] -> "到达目标点成功vla开始"
+                        std_msgs::msg::UInt8 voice_arrived_msg;
+                        voice_arrived_msg.data = 0x0E;
+                        voice_prompt_pub_->publish(voice_arrived_msg);
+                        
                         RCLCPP_INFO(this->get_logger(), "⚙️ 开始执行丝杠升降动作，目标高度: %.1f mm", current_screw_height_target_);
                         {
                             std_msgs::msg::Float32 screw_msg;
@@ -171,13 +162,13 @@ private:
 
                         RCLCPP_INFO(this->get_logger(), "📡 正在向 10.0.0.51 (VLA节点) 下发视觉作业指令...");
                         
-                        // 目标点到达，将任务需求原文发送给大模型处理
                         {
                             std_msgs::msg::String vla_msg;
                             vla_msg.data = current_task_name_;
                             vla_trigger_pub_->publish(vla_msg);
                         }
                         break;
+                    }
                     case rclcpp_action::ResultCode::ABORTED:
                         RCLCPP_ERROR(this->get_logger(), "❌ 导航被强行终止！(可能由于障碍物死锁)");
                         break;
@@ -192,6 +183,11 @@ private:
 
         action_client_->async_send_goal(goal_msg, send_goal_options);
         RCLCPP_INFO(this->get_logger(), "🚙 路线已下发至 Nav2，机器人开始安全移动...");
+        
+        // 动作1：开始导航，下发语音 [0x0D] -> "唤醒成功，导航开始"
+        std_msgs::msg::UInt8 voice_start_msg;
+        voice_start_msg.data = 0x0D;
+        voice_prompt_pub_->publish(voice_start_msg);
     }
 };
 
