@@ -43,7 +43,7 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 阶段 2：发布移动指令 (T+29s)
+    # 阶段 2：发布移动指令 (T+32s)
     # ==========================================
     
     pub_lead_screw_cmd = ExecuteProcess(
@@ -55,7 +55,7 @@ def generate_launch_description():
     )
 
     pub_event = TimerAction(
-        period=29.0,
+        period=32.0,
         actions=[
             LogInfo(msg="============ [事件 4] T+29s：下发下降指令 (强行等待 10 秒后启动上层算法) ============"),
             pub_lead_screw_cmd
@@ -66,11 +66,11 @@ def generate_launch_description():
     # 阶段 3 & 4 & 5 & 6：高阶算法与宏观控制错峰拉起 (纯定时模式)
     # ==========================================
     
-    # 29秒 + 10秒 = 39秒
+    # 32秒 + 10秒 = 42秒
     open3d_event = TimerAction(
-        period=39.0,
+        period=42.0,
         actions=[
-            LogInfo(msg="============ [事件 5] T+39s：丝杠下降已过10秒！全功率拉起 Open3D ============"),
+            LogInfo(msg="============ [事件 5] T+42s：丝杠下降已过10秒！全功率拉起 Open3D ============"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([FindPackageShare('open3d_loc'), 'launch', 'localization_3d_g1.launch.py'])
@@ -79,11 +79,11 @@ def generate_launch_description():
         ]
     )
 
-    # 39秒 + 20秒 = 59秒
+    # 42秒 + 18秒 = 60秒
     nav2_event = TimerAction(
-        period=59.0,
+        period=60.0,
         actions=[
-            LogInfo(msg="============ [事件 6] T+59s：Open3D缓冲期结束！平稳拉起 Nav2 导航栈 ============"),
+            LogInfo(msg="============ [事件 6] T+60s：Open3D缓冲期结束！平稳拉起 Nav2 导航栈 ============"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([FindPackageShare('nav2_luckrobot'), 'launch', 'nav2.launch.py'])
@@ -92,7 +92,7 @@ def generate_launch_description():
         ]
     )
 
-    # 39秒 + 35秒 = 74秒
+    # 42秒 + 32秒 = 74秒
     nav_manager_event = TimerAction(
         period=74.0,
         actions=[
@@ -107,7 +107,7 @@ def generate_launch_description():
         ]
     )
 
-    # 39秒 + 40秒 = 79秒
+    # 42秒 + 37秒 = 79秒
     voice_cmd_event = TimerAction(
         period=79.0,
         actions=[
@@ -122,7 +122,7 @@ def generate_launch_description():
         ]
     )
 
-    # 🔥 39秒 + 43秒 = 82秒：真正的大轴！全部启动完毕后，下发开机语音！
+    # 🔥 42秒 + 40秒 = 82秒：真正的大轴！全部启动完毕后，下发开机语音！
     # 0x0C 对应的十进制是 12
     startup_voice_event = TimerAction(
         period=82.0,
