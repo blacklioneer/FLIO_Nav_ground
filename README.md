@@ -1,5 +1,5 @@
 # 家庭服务机器人
-## 1.项目介绍
+## 1.项目介绍🤖🤖🤖
 主控基于两台Jetson orin nano super8G，一台运行导航、控制与语音交互等，另外一台调用GPU运行VLA，通过Ros作为通讯桥梁;Cpp开发,humble版本;导航基于Mid360s;双臂基于huggingface的lerobot;PCB与CNC来源立创免费打样；代码动态更新，一直优化，直到整机所有功能稳定。
 ## 2.使用说明🌟🌟🌟
 可结合本人blibli此系列视频进行操作(未更新)，视频链接：[jetson nano部署fastlio2建图加定位，A*规划导航](https://www.bilibili.com/video/BV1tbQGBkE4F?vd_source=956043e91d9fa045c1e7c746411b5102)  
@@ -17,7 +17,10 @@
 ### 2.2 该代码仓库相对于源克隆网址做了代码修改，以下是本人部署步骤，可作为您的参考：
 - 首先确定您的mid360s的sdk安装没问题，在ros2的rviz2下能正常可视化到3d点云，注意MID360s_config.json配置的旋转平移矩阵。对应该项目的livox_ws文件夹
 - 确定您的mid360s部署fast_lio2建图没问题，注意config下的mid360.yaml的配置，理解每一项；该launch启动文件包的名称我做了修改：ros2 launch fast_lio_map mapping.launch.py，否则会和fastlio_localization下的fastlio有一定的命名冲突。对应该项目的mid360s_ws文件夹
-- 紧接着部署FAST_LIO_LOCALIZATION_HUMANOID，open3d启动会消耗较大的cpu资源，除部署阶段不建议开启rviz。对应该项目的fastlio_localization文件夹：其子文件夹FAST_LIO与建图文件基本保持一致，注意对比config下的配置文件区别；open3d_loc下的global_localization.cpp文件我也做了优化修改，您可自行对比，重点注意launch下的两个文件的配置内容，我做了部分修改，其中open3d_loc_go1.launch文件我重点修改了open3d的点云采样配置，降低采样配置更好地适配jetson的性能
+- 紧接着部署FAST_LIO_LOCALIZATION_HUMANOID，open3d启动会消耗较大的cpu资源，除部署阶段不建议开启rviz。对应该项目的fastlio_localization文件夹：其子文件夹FAST_LIO与建图文件基本保持一致，注意对比config下的配置文件区别；open3d_loc下的global_localization.cpp文件我也做了优化修改，您可自行对比，重点注意launch下的两个文件的配置内容，我做了部分修改，其中open3d_loc_go1.launch文件我重点修改了open3d的点云采样配置，降低采样配置更好地适配jetson的性能  
+- **🚀🚀🚀以上即可实现地图定位功能，如果仍出现cpu资源紧张，可调节dds配置，配置文件:fastdds_shm.xml,并添加下面两句配置命令于~/.bashrc，记得source**
+**export RMW_IMPLEMENTATION=rmw_fastrtps_cpp**
+**export FASTRTPS_DEFAULT_PROFILES_FILE=/home/你的用户名/文件路径/luckrobot/fastdds_shm.xml**
 - 在部署上述项目阶段，注意tf链条完整与各项数据输出正确。然后我们将3d点云图体素滤波等，可参考luckrobot_ws/src/map_clear文件。后部署3D-2D图压缩项目，对应文件luckrobot_ws/src/pcd2pgm，注意理解config下的配置文件各项（我的仓库该config中有解释），注意您的压缩高度范围，需要和后续的导航点云高度提取范围保持一致
 - 在导航之前运行sudo apt install ros-${ROS_DISTRO}-pointcloud-to-laserscan，这个功能包可以将你的所选高度范围的3d点云投影压缩为2d，另外还需要做一些重映射，防止话题冲突，这部分代码都在open3d的open3d_loc_g1.launch.py下有介绍
 - luckrobot_ws下为本人开发的cpp包。keyboard_control为键盘控制，发布cmdvel控制小车移动建图；robot_display主要为机器人的静态tf发布；wheel_controller为控制小车底盘、丝杠、语音指令与动态tf发布节点；nav2三个文件夹分别为控制器、规划器和nav2的配置三个文件夹，可结合鱼香ros的自定义规划控制算法进行理解这几个包；luckrobot_launch1为一键启动该机器人导航定位等功能的包
