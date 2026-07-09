@@ -14,7 +14,7 @@ def generate_launch_description():
     # ==========================================
     use_rviz_arg = DeclareLaunchArgument(
         'use_rviz',
-        default_value='false',  # 默认值为 false（默认打开 RViz）
+        default_value='true',  # 默认值为 false（默认打开 RViz）
         description='Whether to start RViz2'
     )
     # 获取这个参数的当前值

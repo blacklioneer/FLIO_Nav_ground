@@ -17,7 +17,7 @@ void CustomController::configure(
   plugin_name_ = name;
 
   nav2_util::declare_parameter_if_not_declared(
-      node_, plugin_name_ + ".max_linear_speed", rclcpp::ParameterValue(0.1));
+      node_, plugin_name_ + ".max_linear_speed", rclcpp::ParameterValue(0.5));
   node_->get_parameter(plugin_name_ + ".max_linear_speed", max_linear_speed_);
   
   nav2_util::declare_parameter_if_not_declared(

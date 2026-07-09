@@ -24,7 +24,7 @@ def generate_launch_description():
     ])
 
     # 地图文件路径 - 使用绝对路径指向源码目录中的地图文件
-    map_file = '/home/nvidia/luckrobot/mid360s_ws/map/test.pcd'
+    map_file = '/home/blacklily/saved_maps/1_cleaned.pcd'
 
     # 静态TF发布节点 - camera_init to odom
     static_tf_camera_init2odom = Node(

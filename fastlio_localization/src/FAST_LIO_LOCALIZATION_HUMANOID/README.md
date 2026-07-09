@@ -257,35 +257,22 @@ rostopic echo /localization_3d
 
 The delay time is tested in a **150m * 50m * 30m** large-scale pointcloud map, and the delay time is basically less than 30ms. The computer used in the test has 15GB of memory, CPU is 11th Gen Intel® Core™ i5-11400H @ 2.70GHz × 12, and the system is 64-bit Ubuntu18.04
 
-<div align="center">
-<img src="doc/delay_time.gif" width=75% />
-</div>
 
-## 6. Demo
-
-### 6.0 Rosbag for demo
-
-- Also can be downloaded from [Baidu Netdisk](https://pan.baidu.com/s/1vTLXVYJ6JBlbhNpDf87Cdg?pwd=spdg) (pwd: `spdg`). `mapping.bag` is data for mapping, and `loc.bag` is data for positioning.
-
-- We also provide a case study of a color point cloud map using a robot dog as the demo.You can download it via this [link](https://pan.baidu.com/s/1lN0ZjEEJDp8-3oz8JRtt7w?pwd=6bqu ). (pwd: `6bqu`)
-- If you have an iPhone model with lidar, we strongly recommend using the ``3D Scanner`` app from the App Store to build and locate color point cloud maps.Refer to [doc/3DScanner.mp4](doc/3DScanner.mp4).
-
-### 6.1 Mapping
-
-Use **fast_lio** to do mapping.
-
-Refer to [doc/demo_mapping_fastlio.mp4](doc/demo_mapping_fastlio.mp4).
-
-### 6.2 Fine tune(Recommend)
-
-Use **CloudCompare** to fine tune. Downsampling to reduce the size of the pointcloud map, align the ground plane, and try to ensure that the z-axis of the ground is 0.
-
-Refer to [doc/demo_finetune.mp4](doc/demo_finetune.mp4).
-
-### 6.2 Localizaiton
-
-Refer to [doc/demo_loc.mp4](doc/demo_loc.mp4).
-
-## 7. Acknowledgments
-
-In this work, the odometer module is based on [FAST-LIO2](https://github.com/hku-mars/FAST_LIO), the localization module refers to [FAST_LIO_LOCALIZATION](https://github.com/HViktorTsoi/FAST_LIO_LOCALIZATION), thanks to their great work.
+## 6.self_deployment
+如果初始 ICP 一直达不到阈值，/baselink2map 和 /odom2map 仍会随 odom 发布，但正式的 /localization_3d 要等 loc_initialized_ = true 后才开始持续发布。
+•
+/Odometry_loc 每来一帧，节点都会利用最新的 map→odom 变换计算并发布：
+◦
+/baselink2map
+◦
+/odom2map
+◦
+初始化成功后还会发布 /baselink2map_kalman、/motionlink2map、/localization_3d、置信度和延迟
+•
+ICP 会在后台持续执行，用于周期性修正 map→odom。
+•
+当前 loc_frequence: 2.0 实际表示约每 2 秒 ICP 一次，并非 2 Hz。
+•
+只有 ICP fitness 超过阈值，才会更新校正变换；否则继续使用上一次有效结果。
+1. Remember to use topic ```/localization_3d``` as final Odom topics,
+2. It is better to define ``init_pose`` at ``config/loc_param_g1.yaml`` at the start position when robot start.

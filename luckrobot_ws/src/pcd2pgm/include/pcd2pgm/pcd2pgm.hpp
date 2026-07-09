@@ -44,6 +44,13 @@ private:
   void setMapTopicMsg(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, nav_msgs::msg::OccupancyGrid & msg);
 
+  void setTerrainMapTopicMsg(
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, nav_msgs::msg::OccupancyGrid & msg);
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr filterAnalysisCloud();
+
+  static float computePercentile(std::vector<float> & values, float percentile);
+
   void publishCallback();
 
   void applyTransform();
@@ -52,8 +59,18 @@ private:
   float thre_z_max_;
   float thre_radius_;
   bool flag_pass_through_;
+  bool terrain_mode_;
   float map_resolution_;
   int thres_point_count_;
+  float max_step_height_;
+  float robot_body_height_;
+  float analysis_z_min_;
+  float analysis_z_max_;
+  float ground_percentile_;
+  float obstacle_percentile_;
+  float flat_step_threshold_;
+  int step_cost_max_;
+  int min_points_per_cell_;
   std::string pcd_file_;
   std::string map_topic_name_;
   std::vector<double> odom_to_lidar_odom_;

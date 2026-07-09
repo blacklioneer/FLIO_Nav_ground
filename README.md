@@ -1,13 +1,12 @@
-# 家庭服务机器人
-## 1.项目介绍🤖🤖🤖
-主控基于两台Jetson orin nano super8G，一台运行导航、控制与语音交互等，另外一台调用GPU运行VLA，通过Ros作为通讯桥梁;Cpp开发,humble版本;导航基于Mid360s;双臂基于huggingface的lerobot;PCB与CNC来源立创免费打样；代码动态更新，一直优化，直到整机所有功能稳定。
+# 双足机器人——室外导航人物
+## 1.项目介绍
+主控基于X86_64平台，通过Ros作为通讯桥梁;Cpp开发,humble版本;导航基于Mid360s;
 ## 2.使用说明🌟🌟🌟
 可结合本人blibli此系列视频进行操作(未更新)，视频链接：[jetson nano部署fastlio2建图加定位，A*规划导航](https://www.bilibili.com/video/BV1tbQGBkE4F?vd_source=956043e91d9fa045c1e7c746411b5102)  
 借鉴项目(现在已完成全部环境部署运行，导航完成，遥操训练正在制作，零件等全由本人DIY )：  
 - 建图算法：fast_lio2_ros2：[https://github.com/Ericsii/FAST_LIO_ROS2?tab=readme-ov-file](https://github.com/Ericsii/FAST_LIO_ROS2?tab=readme-ov-file)
 - 定位算法：FAST_LIO_LOCALIZATION_HUMANOID：[https://github.com/deepglint/FAST_LIO_LOCALIZATION_HUMANOID/tree/humble#](https://github.com/deepglint/FAST_LIO_LOCALIZATION_HUMANOID/tree/humble#)
 - 3D-2D图压缩用于Nav2:[https://github.com/LihanChen2004/pcd2pgm](https://github.com/LihanChen2004/pcd2pgm)
-- 机械臂：双臂lerobot：[https://github.com/huggingface/lerobot](https://github.com/huggingface/lerobot)  
 ### 2.1 若您想部署该项目的导航部分，请先确保源项目网址分步部署成功⚠️⚠️⚠️
 - **livox_ws为mid360s的ros2驱动文件;**  
 - **mid360s_ws为fastlio2的建图文件；**  
@@ -74,17 +73,3 @@
 |pcd|pgm|
 |:-:|:-:|
 |![pcd](image/pcd.png)|![pgm](image/pgm.png)|
-## 4.安装依赖与编译项目
-
-## 5.实物图片📸 📸 
-- 实物(仍在完善优化)  
-
-  <img src="image/图片标注1.jpg" width=45% />
-  <img src="image/图片标注2.jpg" width=45% /> 
-   
-  <img src="image/正面.jpg" width=45% />
-  <img src="image/背面.jpg" width=45% />
-
-## 6.📩作者
-- [Luckme921](https://github.com/Luckme921)
-- **邮箱**：1814313359@qq.com

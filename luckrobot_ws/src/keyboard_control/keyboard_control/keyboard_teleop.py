@@ -40,9 +40,9 @@ class KeyboardTeleop(Node):
         self.should_exit = False
 
         # 3. 速度配置（保持原参数）
-        self.base_rpm = 20
-        self.rpm_step = 2
-        self.max_rpm = 100
+        self.base_rpm = 60
+        self.rpm_step = 5
+        self.max_rpm = 200
         self.min_rpm = 5
         
         # 4. 状态保持核心变量
