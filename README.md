@@ -11,7 +11,7 @@
 - **livox_ws为mid360s的ros2驱动文件;**  
 - **mid360s_ws为fastlio2的建图文件；**  
 - **fastlio_localization为open3d定位文件；**  
-- **luckrobot_ws为底盘驱动、部分tf链条与Nav2导航文件等**   
+- **nav_ws为底盘驱动、部分tf链条与Nav2导航文件等**   
 
 ### 2.2 该代码仓库相对于源克隆网址做了代码修改，以下是本人部署步骤，可作为您的参考：
 - 首先确定您的mid360s的sdk安装没问题，在ros2的rviz2下能正常可视化到3d点云，注意MID360s_config.json配置的旋转平移矩阵。对应该项目的livox_ws文件夹
@@ -19,12 +19,12 @@
 - 紧接着部署FAST_LIO_LOCALIZATION_HUMANOID，open3d启动会消耗较大的cpu资源，除部署阶段不建议开启rviz。对应该项目的fastlio_localization文件夹：其子文件夹FAST_LIO与建图文件基本保持一致，注意对比config下的配置文件区别；open3d_loc下的global_localization.cpp文件我也做了优化修改，您可自行对比，重点注意launch下的两个文件的配置内容，我做了部分修改，其中open3d_loc_go1.launch文件我重点修改了open3d的点云采样配置，降低采样配置更好地适配jetson的性能  
 - **🚀🚀🚀以上即可实现地图定位功能，如果仍出现cpu资源紧张，可调节dds配置，配置文件:fastdds_shm.xml,并添加下面两句配置命令于~/.bashrc，记得source**  
 **export RMW_IMPLEMENTATION=rmw_fastrtps_cpp**  
-**export FASTRTPS_DEFAULT_PROFILES_FILE=/home/你的用户名/文件路径/luckrobot/fastdds_shm.xml**
-- 在部署上述项目阶段，注意tf链条完整与各项数据输出正确。然后我们将3d点云图体素滤波等，可参考luckrobot_ws/src/map_clear文件。后部署3D-2D图压缩项目，对应文件luckrobot_ws/src/pcd2pgm，注意理解config下的配置文件各项（我的仓库该config中有解释），注意您的压缩高度范围，需要和后续的导航点云高度提取范围保持一致
+**export FASTRTPS_DEFAULT_PROFILES_FILE=/home/你的用户名/文件路径/nav/fastdds_shm.xml**
+- 在部署上述项目阶段，注意tf链条完整与各项数据输出正确。然后我们将3d点云图体素滤波等，可参考nav_ws/src/map_cleaner文件。后部署3D-2D图压缩项目，对应文件nav_ws/src/pcd2pgm，注意理解config下的配置文件各项（我的仓库该config中有解释），注意您的压缩高度范围，需要和后续的导航点云高度提取范围保持一致
 - 在导航之前运行sudo apt install ros-${ROS_DISTRO}-pointcloud-to-laserscan，这个功能包可以将你的所选高度范围的3d点云投影压缩为2d，另外还需要做一些重映射，防止话题冲突，这部分代码都在open3d的open3d_loc_g1.launch.py下有介绍
-- luckrobot_ws下为本人开发的cpp包。keyboard_control为键盘控制，发布cmdvel控制小车移动建图；robot_display主要为机器人的静态tf发布；wheel_controller为控制小车底盘、丝杠、语音指令与动态tf发布节点；nav2三个文件夹分别为控制器、规划器和nav2的配置三个文件夹，可结合鱼香ros的自定义规划控制算法进行理解这几个包；luckrobot_launch1为一键启动该机器人导航定位等功能的包
+- nav_ws下为本人开发的cpp包。keyboard_control为键盘控制，发布cmdvel控制小车移动建图；robot_display主要为机器人的静态tf发布；wheel_controller为控制小车底盘、丝杠、语音指令与动态tf发布节点；nav2三个文件夹分别为控制器、规划器和nav2的配置三个文件夹，可结合鱼香ros的自定义规划控制算法进行理解这几个包；nav_launch1为一键启动该机器人导航定位等功能的包
 ### 2.3 Node Graph与TF tree
-**以下为运行：ros2 launch luckrobot_launch1 luckrobot_bringup.launch.py 生成的节点关系图与tf链条图**
+**以下为运行：ros2 launch nav_launch1 nav_bringup.launch.py 生成的节点关系图与tf链条图**
 <div align="center">
 <img src="image/rosgraph.png" width=90% />
 </div>
