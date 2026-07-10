@@ -1,0 +1,90 @@
+pcd2pgm:
+  ros__parameters:
+    # 输入点云文件路径，支持 .pcd 和 .ply；只改变这里即可切换待转换点云。
+    input_file: "/home/blacklily/Documents/fused_1.pcd"
+
+    # 点云外参修正 [x, y, z, roll, pitch, yaw]，单位分别为 m/rad。
+    #把输入 PCD 从雷达/里程计相关坐标系修正到 map 栅格生成所需要的坐标姿态。
+    #如果你的 PCD 已经是正的、地面是水平的、Z 轴朝上、XY 平面就是导航平面，就保持
+    odom_to_lidar_odom: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # 是否启用 2.5D 可通行性模式；true 时输出更适合足式/人形机器人的 PGM。
+    terrain_mode: true
+
+    # 地形分析使用的 Z 范围；应覆盖地面、台阶和机器人身体高度内的障碍。
+    analysis_z_min: -1.0
+    analysis_z_max: 2.0
+
+    # 地面估计方式：
+    # percentile: 直接按 ground_percentile 取低分位数。
+    # densest: 先按 Z 聚类，选点数最多的一层。
+    # upper_densest: 先按 Z 聚类，在靠近最低层的候选中选较高且点数足够的一层；适合多段拼接产生下方重影层的点云。
+    ground_estimation_method: percentile
+
+    # percentile 模式使用；每个栅格内取该分位数的 Z 值当地面。
+    ground_percentile: 0.20
+
+    # Z 聚类间隔，单位 m；两层地面重影相差约 10cm 时，可设为 0.04~0.07。
+    ground_cluster_tolerance: 0.05
+
+    # 从选中的地面层内部取哪个分位数；0.50 表示取该层中位数，抗噪声更稳。
+    ground_cluster_percentile: 0.50
+
+    # upper_densest 模式下，只在最低层上方该高度范围内选地面，避免把桌面等高处平面当成地面。
+    ground_layer_max_gap: 0.3
+
+    # upper_densest 模式下，候选层点数至少要达到最大点数层的比例；越低越容易选择稀疏上层。
+    ground_layer_count_ratio: 0.55
+
+    # 单个栅格至少需要的点数；不足时保持 unknown，后续可由插值补小洞。
+    min_points_per_cell: 4
+
+    # 人形机器人可跨越/可接受的最大局部高度差；超过会标记为占用。
+    max_step_height: 0.24
+
+    # 从估计周边真实地面向上检查障碍的高度范围；按机器人躯干/膝部安全高度设置。
+    robot_body_height: 1.2
+
+    # 高于地面多少才开始视为障碍候选，过滤地面粗糙度和轻微噪声。
+    obstacle_min_height: 0.06
+
+    # 障碍候选中超过 max_step_height 的比例阈值；比例和高度同时满足时标记占用。
+    obstacle_ratio_threshold: 0.15
+
+    # 坡度阈值，单位 deg；超过 max_slope_traversable 直接标记占用。
+    max_slope_traversable: 38.0
+
+    # 坡度超过该值后开始产生灰度代价，单位 deg。
+    slope_cost_start: 20.0
+
+    # 高差/障碍高度超过该值后开始产生灰度代价，单位 m。
+    height_cost_start: 0.05
+
+    # 非致命代价上限；OccupancyGrid/PGM 使用 0~100，100 表示占用。
+    step_cost_max: 95
+
+    # 高差和坡度代价缩放，通常保持 1.0；增大后 PGM 中灰度障碍更保守。
+    height_cost_scale: 1.0
+    slope_cost_scale: 1.0
+
+    # 对无点的小洞做反距离插值补全；半径单位为栅格，0 表示关闭。
+    interp_search_radius: 0
+
+    # 插值所需的最少有效邻居数量。
+    min_interp_neighbors: 4
+
+    # 对占用栅格做离线膨胀；半径单位为栅格，保持端口/topic/保存方式不变。
+    obstacle_inflation_radius: 1
+
+    # 预览点云的 Z 切片，与发布的 pcd_cloud topic 相关，不影响 terrain_mode 的分析范围。
+    flag_pass_through: false
+    thre_z_min: -0.4
+    thre_z_max: 0.2
+
+    # 预览点云离群点滤波参数。
+    thre_radius: 2.0
+    thres_point_count: 10
+
+    # 输出 OccupancyGrid 分辨率和 topic；保持 map，便于 map_saver_cli 原方式保存 PGM。
+    map_resolution: 0.1
+    map_topic_name: map
