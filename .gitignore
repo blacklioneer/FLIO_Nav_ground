@@ -21,3 +21,5 @@ __pycache__/
 # 项目无用文件
 orbbecsdk_ws/
 /nav_ws/src/wheel_controller/
+/nav_ws/src/voice_controller/
+/nav_ws/src/robot_display/
