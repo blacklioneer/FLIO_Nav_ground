@@ -24,7 +24,7 @@ def generate_launch_description():
     ])
 
     # 地图文件路径 - 使用绝对路径指向源码目录中的地图文件
-    map_file = '/home/blacklily/saved_maps/1_cleaned.pcd'
+    map_file = '/home/blacklily/saved_maps/fused_clean.pcd'
 
     # 静态TF发布节点 - camera_init to odom
     static_tf_camera_init2odom = Node(
@@ -140,7 +140,7 @@ def generate_launch_description():
             'target_frame': 'body', # 统一投影到地面参考系 (如果TF树报错找不到它，可暂时改为 'body' 或 'base_link' 并调整高度)
             'transform_tolerance': 0.01,
             'min_height': -0.4,                # 最低高度：-0.4米
-            'max_height': 0.2,               # 最高高度：0.2米
+            'max_height': 0.5,               # 最高高度：0.2米
             'angle_min': -3.14159,            # -180度
             'angle_max': 3.14159,             # 180度
             'angle_increment': 0.0087,        # 角度分辨率 (约0.5度)
@@ -158,5 +158,5 @@ def generate_launch_description():
         static_tf_base_center,
         global_localization_node,
         # pointcloud_transformer_node #这个节点是3d导航用的 我这个项目是2d的所以注释掉且压缩为laserscan
-        pointcloud_to_laserscan_node
+        # pointcloud_to_laserscan_node
     ])

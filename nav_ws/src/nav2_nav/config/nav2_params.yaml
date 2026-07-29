@@ -104,25 +104,35 @@ local_costmap:
       height: 3
       resolution: 0.05
       robot_radius: 0.28         # 微调：0.28 (稍微瘦身)
-      plugins: ["obstacle_layer", "inflation_layer"] 
+      plugins: ["traversability_layer", "inflation_layer"] 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0 # 微调：5.0 (让膨胀梯度变陡，危险区变薄)
         inflation_radius: 0.35   # 微调：0.35
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
+      traversability_layer:
+        plugin: "nav2_traversability_layer::TraversabilityLayer"
         enabled: True
-        observation_sources: scan
-        scan:
-          topic: /scan_2d  
-          max_obstacle_height: 2.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+        pointcloud_topic: /cloud_registered_body_1
+        transform_to_costmap_frame: True    v,s kel35p
+        max_cloud_age: 0.5
+        analysis_z_min: -1.0
+        analysis_z_max: 2.0
+        min_points_per_cell: 4
+        ground_percentile: 0.20
+        max_step_height: 0.24
+        robot_body_height: 1.2
+        obstacle_min_height: 0.06
+        obstacle_ratio_threshold: 0.15
+        max_slope_traversable: 38.0
+        slope_cost_start: 20.0
+        height_cost_start: 0.05
+        hard_obstacle_height: 0.35
+        hard_obstacle_ratio_threshold: 0.30
+        hard_slope_limit: 50.0
+        hard_step_height: 0.35
+        soft_cost_max: 200
+        unknown_is_lethal: False
+        reset_each_update: True
       always_send_full_costmap: True
 
 global_costmap:
@@ -136,21 +146,31 @@ global_costmap:
       robot_radius: 0.28         # 全局同步减小到 0.28
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
+      plugins: ["static_layer", "traversability_layer", "inflation_layer"]
+      traversability_layer:
+        plugin: "nav2_traversability_layer::TraversabilityLayer"
         enabled: True
-        observation_sources: scan
-        scan:
-          topic: /scan_2d  
-          max_obstacle_height: 2.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+        pointcloud_topic: /cloud_registered_body_1
+        transform_to_costmap_frame: True
+        max_cloud_age: 1.0
+        analysis_z_min: -1.0
+        analysis_z_max: 2.0
+        min_points_per_cell: 4
+        ground_percentile: 0.20
+        max_step_height: 0.24
+        robot_body_height: 1.2
+        obstacle_min_height: 0.06
+        obstacle_ratio_threshold: 0.15
+        max_slope_traversable: 38.0
+        slope_cost_start: 20.0
+        height_cost_start: 0.05
+        hard_obstacle_height: 0.35
+        hard_obstacle_ratio_threshold: 0.30
+        hard_slope_limit: 50.0
+        hard_step_height: 0.35
+        soft_cost_max: 200
+        unknown_is_lethal: False
+        reset_each_update: False
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
