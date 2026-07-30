@@ -1,12 +1,13 @@
 bt_navigator:
   ros__parameters:
-    use_sim_time: False
-    global_frame: map
-    robot_base_frame: base_link
-    odom_topic: /Odometry_loc
-    bt_loop_duration: 100        # <--- 保持 100，减轻 CPU 负担
-    default_server_timeout: 20
-    wait_for_service_timeout: 1000
+    use_sim_time: False              # 是否使用仿真时钟，真机一般为 False
+    global_frame: map                # Nav2 全局参考坐标系，通常由定位系统发布 map->odom
+    robot_base_frame: base_link      # 机器人本体坐标系，Nav2 以此作为控制参考
+    odom_topic: /Odometry_loc        # 里程计话题，供行为树和导航状态判断使用
+    bt_loop_duration: 100            # 行为树循环周期，单位 ms；100 表示 10Hz
+    default_server_timeout: 20       # 行为树节点等待 action/server 响应的默认超时时间，单位 s
+    wait_for_service_timeout: 1000   # 等待服务可用的超时时间，单位 ms
+    # 行为树需要动态加载的 BT 插件库列表，基本保持 Nav2 默认全集
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
@@ -58,212 +59,294 @@ bt_navigator:
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
-    use_sim_time: False
+    use_sim_time: False              # navigate_through_poses 对应内部 rclcpp node 的时钟配置
 
 bt_navigator_navigate_to_pose_rclcpp_node:
   ros__parameters:
-    use_sim_time: False
+    use_sim_time: False              # navigate_to_pose 对应内部 rclcpp node 的时钟配置
 
 controller_server:
   ros__parameters:
-    use_sim_time: False
-    controller_frequency: 10.0   # <--- 保持 10.0，防止掉帧
-    min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
-    min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
-    progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"] 
-    controller_plugins: ["FollowPath"]
+    use_sim_time: False                   # 是否使用仿真时钟
+    controller_frequency: 15.0           # 控制器主循环频率，单位 Hz
+    min_x_velocity_threshold: 0.001      # 低于该值的 x 速度视为 0，避免数值噪声
+    min_y_velocity_threshold: 0.5        # 低于该值的 y 速度视为 0；当前 DiffDrive 实际不会输出 y
+    min_theta_velocity_threshold: 0.001  # 低于该值的角速度视为 0
+    failure_tolerance: 0.3               # 控制器短时失败容忍时间/距离阈值，防止偶发抖动直接触发失败
+    progress_checker_plugin: "progress_checker"    # 使用的进度检测器名称
+    goal_checker_plugins: ["general_goal_checker"] # 使用的终点判定器列表
+    controller_plugins: ["FollowPath"]             # controller_server 加载的局部控制器插件列表
 
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.05   # <--- 修改：只要移动 5cm 就算有进度
-      movement_time_allowance: 45.0    # <--- 修改：给足 45 秒原地旋转对准的时间，杜绝轻易超时报错
+      plugin: "nav2_controller::SimpleProgressChecker"  # 简单进度检测器
+      required_movement_radius: 0.05                    # 在限定时间内至少移动 5cm 才算“有进度”
+      movement_time_allowance: 20.0                     # 允许在该时间内没有显著位移，单位 s
     general_goal_checker:
-      stateful: True
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.20    # 放宽到 20 厘米。进入目标圈内就算到达
-      yaw_goal_tolerance: 0.20   # 误差在 11.5 度以内就算到达
+      stateful: True                            # 使用状态式目标判断，进入目标区后继续跟踪末端姿态
+      plugin: "nav2_controller::SimpleGoalChecker" # 简单目标检测器
+      xy_goal_tolerance: 0.20                  # 位置到达容差，单位 m
+      yaw_goal_tolerance: 0.20                 # 朝向到达容差，单位 rad
     FollowPath:
-      plugin: "nav2_custom_controller::CustomController"
-      max_linear_speed: 0.10
-      max_angular_speed: 0.70    # 强制限制最大角速度，抑制超调
-      lookahead_dist: 0.80       # 前视距离拉大，无视微小偏移
+      plugin: "nav2_mppi_controller::MPPIController"  # 官方 MPPI 局部控制器
+      motion_model: "DiffDrive"       # 运动学模型；当前按差速/不可横移模型处理
+      time_steps: 40                  # 单条候选轨迹的离散步数
+      model_dt: 0.05                  # 相邻离散步时间间隔，单位 s；40*0.05=2.0s 预测窗口
+      batch_size: 1000                # 每轮采样的候选控制序列数量
+      iteration_count: 1              # 每次控制求解的优化迭代次数
+      prune_distance: 1.7             # 从全局路径头部裁剪已通过路径的距离，单位 m
+      transform_tolerance: 0.2        # TF 查询容差，单位 s
+      temperature: 0.3                # MPPI softmax 温度，越小越偏向最优样本
+      gamma: 0.015                    # 控制变化惩罚项，越大越偏向平滑控制
+      visualize: false                # 是否发布 MPPI 轨迹可视化结果，开启会增加开销
+      regenerate_noises: false        # 是否每轮重新生成采样噪声；false 可减轻 CPU 开销
+      retry_attempt_limit: 3          # 求解失败时的重试次数上限
+      reset_period: 1.0               # 长时间未调用时重置内部状态的时间阈值，单位 s
+
+      vx_max: 0.12                    # 最大前向速度，单位 m/s
+      vx_min: 0.0                     # 最小前向速度，0 表示不允许主动倒车
+      vy_max: 0.0                     # 最大横向速度；DiffDrive 下必须为 0
+      wz_max: 0.80                    # 最大角速度，单位 rad/s
+      vx_std: 0.20                    # 采样时 x 速度噪声标准差
+      vy_std: 0.0                     # 采样时 y 速度噪声标准差；DiffDrive 下为 0
+      wz_std: 0.40                    # 采样时角速度噪声标准差
+
+      # MPPI 打分器列表，按照这些 critic 对每条候选轨迹打分
+      critics: [
+        "ConstraintCritic",
+        "CostCritic",
+        "ObstaclesCritic",
+        "GoalCritic",
+        "GoalAngleCritic",
+        "PathAlignCritic",
+        "PathFollowCritic",
+        "PreferForwardCritic"
+      ]
+
+      ConstraintCritic:
+        enabled: true           # 是否启用运动约束 critic
+        cost_power: 1           # 代价幂次，1 表示线性
+        cost_weight: 4.0        # 权重，越大越强调速度/曲率约束
+      CostCritic:
+        enabled: true               # 是否启用 costmap 软代价 critic
+        cost_power: 1               # 代价幂次
+        cost_weight: 3.5            # costmap 软代价权重，直接影响绕开高 traversability cost 的倾向
+        critical_cost: 300.0        # 临界高代价阈值，超过后会更强烈惩罚
+        collision_cost: 1000000.0   # 发生碰撞时代价，通常给极大值
+        consider_footprint: true    # 是否按机器人 footprint 检查代价，而非仅检查中心点
+        near_goal_distance: 0.5     # 距离目标 0.5m 内弱化该 critic，避免终点附近过度绕行
+      ObstaclesCritic:
+        enabled: true                    # 是否启用障碍物 critic
+        cost_power: 1                    # 代价幂次
+        repulsion_weight: 1.8            # 远离障碍/高代价边缘的排斥权重
+        critical_weight: 20.0            # 接近危险区域时的强惩罚权重
+        collision_cost: 1000000.0        # 碰撞代价，极大值
+        collision_margin_distance: 0.15  # 与障碍保持的安全边界距离，单位 m
+        consider_footprint: true         # 按 footprint 做碰撞检测
+        near_goal_distance: 0.5          # 距终点很近时弱化该 critic
+      GoalCritic:
+        enabled: true               # 是否启用终点位置吸引 critic
+        cost_power: 1               # 代价幂次
+        cost_weight: 5.0            # 向终点靠近的权重
+        threshold_to_consider: 1.4  # 当距离终点小于该值时开始重点考虑，单位 m
+      GoalAngleCritic:
+        enabled: true               # 是否启用终点朝向 critic
+        cost_power: 1               # 代价幂次
+        cost_weight: 3.0            # 终点朝向对齐权重
+        threshold_to_consider: 0.6  # 接近终点 0.6m 内开始重点考虑朝向
+      PathAlignCritic:
+        enabled: true                      # 是否启用路径对齐 critic
+        cost_power: 1                      # 代价幂次
+        cost_weight: 8.0                   # 与全局路径对齐的权重
+        max_path_occupancy_ratio: 0.05     # 允许局部路径附近被占据的比例上限
+        trajectory_point_step: 3           # 采样轨迹上每隔几个点做一次对齐评价
+        threshold_to_consider: 0.4         # 与路径偏差超过该阈值时更重视路径对齐
+        offset_from_furthest: 8            # 从轨迹最远点向前回看若干点做对齐打分
+        use_path_orientations: false       # 是否使用全局路径姿态参与对齐；当前只对齐几何位置
+      PathFollowCritic:
+        enabled: true               # 是否启用沿路径前进 critic
+        cost_power: 1               # 代价幂次
+        cost_weight: 6.0            # 沿全局路径前进的权重
+        threshold_to_consider: 1.4  # 距终点较远时主要靠它推动沿路径前进
+      PreferForwardCritic:
+        enabled: true               # 是否启用“偏好前进” critic
+        cost_power: 1               # 代价幂次
+        cost_weight: 2.0            # 抑制倒退/过度后撤的权重
+        threshold_to_consider: 0.5  # 距终点较近时弱化前进偏好，方便末端调整
 
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
-      global_frame: odom
-      robot_base_frame: base_link
-      use_sim_time: False
-      rolling_window: true
-      width: 3
-      height: 3
-      resolution: 0.05
-      robot_radius: 0.28         # 微调：0.28 (稍微瘦身)
-      plugins: ["traversability_layer", "inflation_layer"] 
+      update_frequency: 5.0               # 局部代价地图更新频率，单位 Hz
+      publish_frequency: 2.0              # 局部代价地图发布频率，单位 Hz
+      global_frame: odom                  # 局部代价地图所处坐标系，通常使用 odom
+      robot_base_frame: base_link         # 机器人本体坐标系
+      use_sim_time: False                 # 是否使用仿真时钟
+      rolling_window: true                # 是否使用滚动窗口局部地图
+      width: 3                            # 局部地图宽度，单位 m
+      height: 3                           # 局部地图高度，单位 m
+      resolution: 0.05                    # 栅格分辨率，单位 m/cell
+      robot_radius: 0.28                  # 机器人近似半径，供碰撞和膨胀计算使用
+      plugins: ["traversability_layer", "inflation_layer"]  # 局部地图插件顺序
       inflation_layer:
-        plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0 # 微调：5.0 (让膨胀梯度变陡，危险区变薄)
-        inflation_radius: 0.35   # 微调：0.35
+        plugin: "nav2_costmap_2d::InflationLayer"  # 障碍膨胀层
+        cost_scaling_factor: 5.0                   # 膨胀代价衰减斜率，越大衰减越快
+        inflation_radius: 0.35                     # 膨胀半径，单位 m
       traversability_layer:
-        plugin: "nav2_traversability_layer::TraversabilityLayer"
-        enabled: True
-        pointcloud_topic: /cloud_registered_body_1
-        transform_to_costmap_frame: True
-        max_cloud_age: 0.5
-        analysis_z_min: -1.0
-        analysis_z_max: 2.0
-        min_points_per_cell: 4
-        ground_percentile: 0.20
-        max_step_height: 0.24
-        robot_body_height: 1.2
-        obstacle_min_height: 0.06
-        obstacle_ratio_threshold: 0.15
-        max_slope_traversable: 38.0
-        slope_cost_start: 20.0
-        height_cost_start: 0.05
-        hard_obstacle_height: 0.35
-        hard_obstacle_ratio_threshold: 0.30
-        hard_slope_limit: 50.0
-        hard_step_height: 0.35
-        soft_cost_max: 200
-        unknown_is_lethal: False
-        reset_each_update: True
-        decay_enabled: False
-        decay_rate_per_second: 0.0
-        decay_minimum_cost: 1
-      always_send_full_costmap: True
+        plugin: "nav2_traversability_layer::TraversabilityLayer"  # 自定义可通行性层
+        enabled: True                    # 是否启用该层
+        pointcloud_topic: /cloud_registered_body_1  # 输入地形点云话题
+        transform_to_costmap_frame: True # 是否先将点云转换到 costmap 坐标系再处理
+        max_cloud_age: 0.5               # 点云最大允许延迟，超过则认为过旧，单位 s
+        analysis_z_min: -1.0             # 参与分析的最低 z，高于该范围外的点会被忽略
+        analysis_z_max: 2.0              # 参与分析的最高 z
+        min_points_per_cell: 4           # 每个栅格至少需要多少点才进行有效地形评估
+        ground_percentile: 0.20          # 地面估计使用 z 分布的 20% 分位点
+        max_step_height: 0.24            # 允许通过的最大台阶/高差，单位 m
+        robot_body_height: 1.2           # 机器人身体上缘高度，用于障碍物评估范围
+        obstacle_min_height: 0.06        # 高于地面该值以上的点开始视为障碍候选，单位 m
+        obstacle_ratio_threshold: 0.15   # 障碍点比例超过该阈值后更倾向判为不可通行
+        max_slope_traversable: 38.0      # 可通行最大坡度，单位 deg
+        slope_cost_start: 20.0           # 从该坡度开始逐渐增加软代价，单位 deg
+        height_cost_start: 0.05          # 从该高差开始逐渐增加软代价，单位 m
+        hard_obstacle_height: 0.35       # 超过该障碍高度直接判为硬障碍，单位 m
+        hard_obstacle_ratio_threshold: 0.30 # 障碍比例超过该值时更容易直接判为硬障碍
+        hard_slope_limit: 50.0           # 超过该坡度直接判为硬障碍，单位 deg
+        hard_step_height: 0.35           # 超过该高差直接判为硬障碍，单位 m
+        soft_cost_max: 200               # 软代价上限，低于 lethal obstacle
+        unknown_is_lethal: False         # 未知区域是否直接按致命障碍处理
+        reset_each_update: True          # 每次更新是否重置整层；局部层通常设 True
+        decay_enabled: False             # 是否启用代价衰减；局部层一般不需要
+        decay_rate_per_second: 0.0       # 每秒衰减的代价值
+        decay_minimum_cost: 1            # 衰减到该阈值以下后清空
+      always_send_full_costmap: True     # 每次都发布整张 costmap，便于调试和下游同步
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 2.0
-      publish_frequency: 2.0
-      global_frame: map
-      robot_base_frame: base_link
-      use_sim_time: False
-      robot_radius: 0.28         # 全局同步减小到 0.28
-      resolution: 0.05
-      track_unknown_space: true
-      plugins: ["static_layer", "traversability_layer", "inflation_layer"]
+      update_frequency: 2.0               # 全局代价地图更新频率，单位 Hz
+      publish_frequency: 2.0              # 全局代价地图发布频率，单位 Hz
+      global_frame: map                   # 全局代价地图坐标系，必须与规划器一致
+      robot_base_frame: base_link         # 机器人本体坐标系
+      use_sim_time: False                 # 是否使用仿真时钟
+      robot_radius: 0.28                  # 机器人半径
+      resolution: 0.05                    # 全局地图分辨率
+      track_unknown_space: true           # 是否保留未知区域语义；全局规划通常建议开启
+      plugins: ["static_layer", "traversability_layer", "inflation_layer"] # 全局代价地图插件顺序
       traversability_layer:
-        plugin: "nav2_traversability_layer::TraversabilityLayer"
-        enabled: True
-        pointcloud_topic: /cloud_registered_body_1
-        transform_to_costmap_frame: True
-        max_cloud_age: 1.0
-        analysis_z_min: -1.0
-        analysis_z_max: 2.0
-        min_points_per_cell: 4
-        ground_percentile: 0.20
-        max_step_height: 0.24
-        robot_body_height: 1.2
-        obstacle_min_height: 0.06
-        obstacle_ratio_threshold: 0.15
-        max_slope_traversable: 38.0
-        slope_cost_start: 20.0
-        height_cost_start: 0.05
-        hard_obstacle_height: 0.35
-        hard_obstacle_ratio_threshold: 0.30
-        hard_slope_limit: 50.0
-        hard_step_height: 0.35
-        soft_cost_max: 200
-        unknown_is_lethal: False
-        # reset_each_update control the global traversability_map will be stored,
-        # false is true. Enabling the decay switch is recommend
-        reset_each_update: False
-        decay_enabled: True
-        decay_rate_per_second: 30.0
-        decay_minimum_cost: 1
+        plugin: "nav2_traversability_layer::TraversabilityLayer"  # 同一可通行性层，用于全局规划
+        enabled: True                    # 是否启用
+        pointcloud_topic: /cloud_registered_body_1  # 输入点云
+        transform_to_costmap_frame: True # 是否先变换到 map frame 再处理
+        max_cloud_age: 1.0               # 全局层允许更老一点的点云，单位 s
+        analysis_z_min: -1.0             # 参与分析的最低 z
+        analysis_z_max: 2.0              # 参与分析的最高 z
+        min_points_per_cell: 4           # 每格最少点数
+        ground_percentile: 0.20          # 地面估计分位点
+        max_step_height: 0.24            # 允许通过的最大台阶/高差
+        robot_body_height: 1.2           # 机器人身体高度评估范围
+        obstacle_min_height: 0.06        # 障碍候选最小离地高度
+        obstacle_ratio_threshold: 0.15   # 障碍比例阈值
+        max_slope_traversable: 38.0      # 可通行最大坡度
+        slope_cost_start: 20.0           # 开始叠加坡度软代价的阈值
+        height_cost_start: 0.05          # 开始叠加高差软代价的阈值
+        hard_obstacle_height: 0.35       # 直接判为硬障碍的障碍高度
+        hard_obstacle_ratio_threshold: 0.30 # 直接判为硬障碍的障碍比例阈值
+        hard_slope_limit: 50.0           # 直接判为硬障碍的坡度阈值
+        hard_step_height: 0.35           # 直接判为硬障碍的高差阈值
+        soft_cost_max: 200               # 软代价上限
+        unknown_is_lethal: False         # 未知区域是否视为致命障碍
+        reset_each_update: False         # 全局层不每次重置，保留历史观测结果
+        decay_enabled: True              # 是否启用历史代价衰减，适合消除动态障碍残留
+        decay_rate_per_second: 30.0      # 每秒衰减的代价值
+        decay_minimum_cost: 1            # 衰减到该阈值以下即清空
       static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
+        plugin: "nav2_costmap_2d::StaticLayer"  # 静态 2D 地图层，来源于 map_server
+        map_subscribe_transient_local: True     # 订阅 transient_local 地图，确保晚启动也能拿到地图
       inflation_layer:
-        plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0 # 全局同步修改到 5.0
-        inflation_radius: 0.35   # 全局同步修改到 0.35
-      always_send_full_costmap: True
+        plugin: "nav2_costmap_2d::InflationLayer"  # 全局膨胀层
+        cost_scaling_factor: 5.0                   # 膨胀代价衰减斜率
+        inflation_radius: 0.35                     # 膨胀半径
+      always_send_full_costmap: True               # 每次完整发布全局 costmap
 
 map_server:
   ros__parameters:
-    use_sim_time: False
-    yaml_filename: ""
+    use_sim_time: False       # 是否使用仿真时钟
+    yaml_filename: ""         # 地图 yaml 文件路径；通常由 launch 文件传入
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
-    use_sim_time: False
-    planner_plugins: ["GridBased"]
+    expected_planner_frequency: 20.0    # 期望全局规划频率，单位 Hz
+    use_sim_time: False                 # 是否使用仿真时钟
+    planner_plugins: ["GridBased"]      # 加载的全局规划器列表
     GridBased:
-      plugin: "nav2_custom_planner/CustomPlanner"
-      interpolation_resolution: 0.1
+      plugin: "nav2_custom_planner/CustomPlanner" # 自定义全局规划器插件
+      interpolation_resolution: 0.1     # 输出路径插值分辨率，单位 m
+      node_cost_upper_bound: 252.0      # A* 允许通过的最大栅格代价值上限
+      sight_cost_upper_bound: 180.0     # 视线平滑时允许穿过的最大栅格代价值上限
+      cost_penalty_gain: 100.0          # traversability 软代价映射到 A* 惩罚项的增益
+      turn_penalty: 3.0                 # 搜索方向变化时的额外惩罚，抑制过多转折
 
 smoother_server:
   ros__parameters:
-    use_sim_time: False
-    smoother_plugins: ["simple_smoother"]
+    use_sim_time: False                      # 是否使用仿真时钟
+    smoother_plugins: ["simple_smoother"]    # 路径平滑器列表
     simple_smoother:
-      plugin: "nav2_smoother::SimpleSmoother"
-      tolerance: 1.0e-10
-      max_its: 1000
-      do_refinement: True
+      plugin: "nav2_smoother::SimpleSmoother" # 官方简单路径平滑器
+      tolerance: 1.0e-10                      # 迭代收敛容差
+      max_its: 1000                           # 最大迭代次数
+      do_refinement: True                     # 是否做进一步细化平滑
 
 behavior_server:
   ros__parameters:
-    costmap_topic: local_costmap/costmap_raw
-    footprint_topic: local_costmap/published_footprint
-    cycle_frequency: 10.0
-    # 1. 把 backup 加回插件列表，满足行为树的加载要求
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    costmap_topic: local_costmap/costmap_raw          # 行为服务器使用的局部 costmap 话题
+    footprint_topic: local_costmap/published_footprint # 机器人 footprint 话题
+    cycle_frequency: 10.0                             # 行为服务器主循环频率，单位 Hz
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"] # 恢复/行为插件
     spin:
-      plugin: "nav2_behaviors/Spin"
+      plugin: "nav2_behaviors/Spin"              # 原地旋转恢复行为
     backup:
-      plugin: "nav2_behaviors/BackUp"
+      plugin: "nav2_behaviors/BackUp"            # 后退恢复行为
     drive_on_heading:
-      plugin: "nav2_behaviors/DriveOnHeading"
+      plugin: "nav2_behaviors/DriveOnHeading"    # 朝固定方向前进的行为
     wait:
-      plugin: "nav2_behaviors/Wait"
+      plugin: "nav2_behaviors/Wait"              # 原地等待行为
     assisted_teleop:
-      plugin: "nav2_behaviors/AssistedTeleop"
-    global_frame: odom
-    robot_base_frame: base_link
-    transform_tolerance: 0.1
-    use_sim_time: False
-    simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+      plugin: "nav2_behaviors/AssistedTeleop"    # 辅助遥操作行为
+    global_frame: odom                           # 行为服务器使用的参考坐标系
+    robot_base_frame: base_link                  # 机器人基坐标系
+    transform_tolerance: 0.1                     # TF 容差，单位 s
+    use_sim_time: False                          # 是否使用仿真时钟
+    simulate_ahead_time: 2.0                     # 行为仿真前视时间，单位 s
+    max_rotational_vel: 1.0                      # 恢复行为允许的最大角速度
+    min_rotational_vel: 0.4                      # 恢复行为允许的最小角速度
+    rotational_acc_lim: 3.2                      # 恢复行为角加速度上限
 
 robot_state_publisher:
   ros__parameters:
-    use_sim_time: False
+    use_sim_time: False   # robot_state_publisher 是否使用仿真时钟
 
 waypoint_follower:
   ros__parameters:
-    use_sim_time: False
-    loop_rate: 20
-    stop_on_failure: false
-    waypoint_task_executor_plugin: "wait_at_waypoint"
+    use_sim_time: False                           # 是否使用仿真时钟
+    loop_rate: 20                                 # waypoint 跟随循环频率，单位 Hz
+    stop_on_failure: false                        # 某个 waypoint 失败后是否立刻停止整个任务
+    waypoint_task_executor_plugin: "wait_at_waypoint" # 每个 waypoint 到达后执行的任务插件
     wait_at_waypoint:
-      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
-      enabled: True
-      waypoint_pause_duration: 200
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint" # waypoint 等待任务
+      enabled: True                                   # 是否启用该任务
+      waypoint_pause_duration: 200                     # 每个 waypoint 停留时长，单位 ms
 
 velocity_smoother:
   ros__parameters:
-    use_sim_time: False
-    smoothing_frequency: 20.0
-    scale_velocities: False
-    feedback: "OPEN_LOOP"
-    max_velocity: [0.26, 0.0, 1.0]
-    min_velocity: [-0.01, 0.0, -1.0]
-    max_accel: [2.5, 0.0, 3.2]
-    max_decel: [-2.5, 0.0, -3.2]
-    odom_topic: "/Odometry_loc"  
-    odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 1.0
+    use_sim_time: False                 # 是否使用仿真时钟
+    smoothing_frequency: 20.0           # 速度平滑器输出频率，单位 Hz
+    scale_velocities: False             # 是否按比例整体缩放速度；False 表示独立限幅
+    feedback: "OPEN_LOOP"               # 开环模式，不依赖底盘反馈速度闭环修正
+    max_velocity: [0.26, 0.0, 1.0]      # [vx, vy, wz] 最大速度限制
+    min_velocity: [-0.01, 0.0, -1.0]    # [vx, vy, wz] 最小速度限制
+    max_accel: [2.5, 0.0, 3.2]          # [vx, vy, wz] 最大加速度限制
+    max_decel: [-2.5, 0.0, -3.2]        # [vx, vy, wz] 最大减速度限制（负值）
+    odom_topic: "/Odometry_loc"         # 速度平滑器使用的里程计话题
+    odom_duration: 0.1                  # 里程计历史缓存时长，单位 s
+    deadband_velocity: [0.0, 0.0, 0.0]  # 死区速度，小于该值直接置零
+    velocity_timeout: 1.0               # 超过该时间未收到新速度命令则超时清零，单位 s

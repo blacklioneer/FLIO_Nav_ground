@@ -19,8 +19,8 @@ namespace nav2_custom_planner {
 
 struct AStarNode {
   unsigned int x, y;
-  double g_cost, h_cost, f_cost; 
-  std::shared_ptr<AStarNode> parent; 
+  double g_cost, h_cost, f_cost;
+  std::shared_ptr<AStarNode> parent;
 
   AStarNode(unsigned int x, unsigned int y, double g, double h, std::shared_ptr<AStarNode> p = nullptr)
       : x(x), y(y), g_cost(g), h_cost(h), f_cost(g + h), parent(p) {}
@@ -52,16 +52,27 @@ private:
   nav2_util::LifecycleNode::SharedPtr node_;
   nav2_costmap_2d::Costmap2D *costmap_;
   std::string global_frame_, name_;
-  double interpolation_resolution_;
+  double interpolation_resolution_{0.1};
+  double node_cost_upper_bound_{252.0};
+  double sight_cost_upper_bound_{180.0};
+  double cost_penalty_gain_{100.0};
+  double turn_penalty_{3.0};
 
+  // Compute the Euclidean heuristic used by A*.
   double getHeuristic(unsigned int x1, unsigned int y1, unsigned int x2, unsigned int y2);
-  
+  // Reject cells that are outside the map, unknown, or effectively lethal.
   bool isNodeValid(unsigned int x, unsigned int y);
-  
-  // 【修改点】：新增严苛判断，用于防止切内角
-  bool isSightValid(unsigned int x, unsigned int y); 
-  
+  // Reject cells that are too expensive for line-of-sight smoothing.
+  bool isSightValid(unsigned int x, unsigned int y);
+  // Convert a costmap cell cost into a traversability penalty for A* expansion.
+  double getTraversalPenalty(unsigned int x, unsigned int y) const;
+  // Return an extra penalty when the expansion direction changes.
+  double getTurnPenalty(
+    const std::shared_ptr<AStarNode> & current_node,
+    unsigned int next_x, unsigned int next_y) const;
+  // Provide a hex-like neighborhood to reduce Manhattan-style path artifacts.
   std::vector<std::pair<int, int>> getHexNeighbors(unsigned int y);
+  // Check whether two cells can be connected directly during path smoothing.
   bool hasLineOfSight(unsigned int x0, unsigned int y0, unsigned int x1, unsigned int y1);
 };
 

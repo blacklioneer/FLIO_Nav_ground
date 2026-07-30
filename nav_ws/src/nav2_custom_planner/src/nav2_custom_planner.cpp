@@ -9,6 +9,7 @@
 
 namespace nav2_custom_planner {
 
+// Configure planner state and expose the key traversability tuning parameters.
 void CustomPlanner::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent, std::string name,
                               std::shared_ptr<tf2_ros::Buffer> tf,
                               std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) {
@@ -16,44 +17,77 @@ void CustomPlanner::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr &pa
   costmap_ = costmap_ros->getCostmap();
   global_frame_ = costmap_ros->getGlobalFrameID();
   nav2_util::declare_parameter_if_not_declared(node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(0.1));
+  nav2_util::declare_parameter_if_not_declared(node_, name_ + ".node_cost_upper_bound", rclcpp::ParameterValue(252.0));
+  nav2_util::declare_parameter_if_not_declared(node_, name_ + ".sight_cost_upper_bound", rclcpp::ParameterValue(180.0));
+  nav2_util::declare_parameter_if_not_declared(node_, name_ + ".cost_penalty_gain", rclcpp::ParameterValue(100.0));
+  nav2_util::declare_parameter_if_not_declared(node_, name_ + ".turn_penalty", rclcpp::ParameterValue(3.0));
   node_->get_parameter(name_ + ".interpolation_resolution", interpolation_resolution_);
+  node_->get_parameter(name_ + ".node_cost_upper_bound", node_cost_upper_bound_);
+  node_->get_parameter(name_ + ".sight_cost_upper_bound", sight_cost_upper_bound_);
+  node_->get_parameter(name_ + ".cost_penalty_gain", cost_penalty_gain_);
+  node_->get_parameter(name_ + ".turn_penalty", turn_penalty_);
 }
 
 void CustomPlanner::cleanup() {}
 void CustomPlanner::activate() {}
 void CustomPlanner::deactivate() {}
 
+// Use straight-line distance as the admissible A* heuristic.
 double CustomPlanner::getHeuristic(unsigned int x1, unsigned int y1, unsigned int x2, unsigned int y2) {
   return std::hypot(static_cast<double>(x1) - x2, static_cast<double>(y1) - y2);
 }
 
-// 找路时的底线判定
+// Treat unknown cells and lethal cells as invalid search nodes.
 bool CustomPlanner::isNodeValid(unsigned int x, unsigned int y) {
   if (x >= costmap_->getSizeInCellsX() || y >= costmap_->getSizeInCellsY()) return false;
   unsigned char cost = costmap_->getCost(x, y);
-  return (cost < 253 && cost != nav2_costmap_2d::NO_INFORMATION);
+  return (cost <= node_cost_upper_bound_ && cost != nav2_costmap_2d::NO_INFORMATION);
 }
 
-// 视线平滑时的安全底线
+// Apply a stricter bound during shortcut smoothing to avoid cutting terrain corners.
 bool CustomPlanner::isSightValid(unsigned int x, unsigned int y) {
   if (x >= costmap_->getSizeInCellsX() || y >= costmap_->getSizeInCellsY()) return false;
   unsigned char cost = costmap_->getCost(x, y);
-  return (cost < 180 && cost != nav2_costmap_2d::NO_INFORMATION);
+  return (cost <= sight_cost_upper_bound_ && cost != nav2_costmap_2d::NO_INFORMATION);
 }
 
+// Convert traversability soft cost into a quadratic expansion penalty.
+double CustomPlanner::getTraversalPenalty(unsigned int x, unsigned int y) const {
+  const double normalized_cost = static_cast<double>(costmap_->getCost(x, y)) / 254.0;
+  return normalized_cost * normalized_cost * cost_penalty_gain_;
+}
+
+// Penalize direction changes so the global path remains smoother for MPPI tracking.
+double CustomPlanner::getTurnPenalty(
+    const std::shared_ptr<AStarNode> & current_node,
+    unsigned int next_x, unsigned int next_y) const {
+  if (current_node == nullptr || current_node->parent == nullptr) {
+    return 0.0;
+  }
+
+  const int old_dx = static_cast<int>(current_node->x) - static_cast<int>(current_node->parent->x);
+  const int old_dy = static_cast<int>(current_node->y) - static_cast<int>(current_node->parent->y);
+  const int new_dx = static_cast<int>(next_x) - static_cast<int>(current_node->x);
+  const int new_dy = static_cast<int>(next_y) - static_cast<int>(current_node->y);
+  return (old_dx == new_dx && old_dy == new_dy) ? 0.0 : turn_penalty_;
+}
+
+// Use a hex-like neighborhood to reduce axis-aligned bias in the global path.
 std::vector<std::pair<int, int>> CustomPlanner::getHexNeighbors(unsigned int y) {
   if (y % 2 == 0) return {{1, 0}, {0, 1}, {-1, 0}, {0, -1}, {1, 1}, {1, -1}};
   else return {{1, 0}, {0, 1}, {-1, 0}, {0, -1}, {-1, 1}, {-1, -1}};
 }
 
+// Check whether a direct segment only crosses sufficiently traversable cells.
 bool CustomPlanner::hasLineOfSight(unsigned int x0, unsigned int y0, unsigned int x1, unsigned int y1) {
   nav2_util::LineIterator line(x0, y0, x1, y1);
   for (; line.isValid(); line.advance()) {
-    if (!isSightValid(line.getX(), line.getY())) return false; 
+    if (!isSightValid(line.getX(), line.getY())) return false;
   }
-  return true; 
+  return true;
 }
 
+// Plan a global path on top of the global costmap, including traversability costs.
 nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStamped &start,
                                               const geometry_msgs::msg::PoseStamped &goal) {
   nav_msgs::msg::Path global_path;
@@ -92,27 +126,11 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
         int next_index = next_y * costmap_->getSizeInCellsX() + next_x;
         if (!closed_list[next_index]) {
           
-          // 【核心改造1：抛弃最短路径，开启指数级安全惩罚】
-          // 哪怕稍微偏离正中间一点点，代价也会爆炸增长，逼迫算法在最空旷的地带画线
-          double normalized_cost = static_cast<double>(costmap_->getCost(next_x, next_y)) / 254.0;
-          double safety_penalty = normalized_cost * normalized_cost * 100.0; 
-          
-          // 【核心改造2：转向惩罚】
-          // 如果搜索方向发生了改变，加上严厉的惩罚，逼迫算法生成长直线，减少小车自转需求
-          double turn_penalty = 0.0;
-          if (current_node->parent != nullptr) {
-            int old_dx = static_cast<int>(current_node->x) - static_cast<int>(current_node->parent->x);
-            int old_dy = static_cast<int>(current_node->y) - static_cast<int>(current_node->parent->y);
-            int new_dx = static_cast<int>(next_x) - static_cast<int>(current_node->x);
-            int new_dy = static_cast<int>(next_y) - static_cast<int>(current_node->y);
-            if (old_dx != new_dx || old_dy != new_dy) {
-                turn_penalty = 3.0; // 一旦转弯就罚分
-            }
-          }
+          // Combine unit step cost with traversability and heading smoothness penalties.
+          double g_cost =
+              current_node->g_cost + 1.0 + getTraversalPenalty(next_x, next_y) +
+              getTurnPenalty(current_node, next_x, next_y);
 
-          // 总代价值：基础距离 + 极度怕死的安全惩罚 + 极度讨厌转弯的惩罚
-          double g_cost = current_node->g_cost + 1.0 + safety_penalty + turn_penalty; 
-          
           double h_cost = getHeuristic(next_x, next_y, goal_x, goal_y);
           open_list.push(std::make_shared<AStarNode>(next_x, next_y, g_cost, h_cost, current_node));
         }
@@ -133,8 +151,9 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
     std::reverse(reverse_path.begin(), reverse_path.end());
 
     if (reverse_path.size() > 2) {
+      // First collapse long straight and low-cost segments.
       std::vector<geometry_msgs::msg::PoseStamped> smoothed_path;
-      smoothed_path.push_back(reverse_path.front()); 
+      smoothed_path.push_back(reverse_path.front());
 
       size_t current_idx = 0;
       while (current_idx < reverse_path.size() - 1) {
@@ -150,6 +169,7 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
         current_idx = next_idx;
       }
       
+      // Then interpolate so the downstream local planner receives a dense reference path.
       std::vector<geometry_msgs::msg::PoseStamped> interpolated_path;
       for (size_t i = 0; i < smoothed_path.size() - 1; ++i) {
         auto p1 = smoothed_path[i]; auto p2 = smoothed_path[i+1];

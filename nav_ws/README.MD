@@ -4,7 +4,7 @@
 
 - `nav2_nav`：Nav2 启动、地图加载、导航参数配置。
 - `nav2_custom_planner`：自定义全局规划器插件。
-- `nav2_custom_controller`：自定义局部控制器插件。
+- `nav2_custom_controller`：历史自定义局部控制器插件（当前默认不再启用）。
 - `nav2_traversability_layer`：面向足式机器人的 PointCloud2 可通行性 costmap layer。
 
 总启动入口在 `nav_launch1/launch/nav_bringup.launch.py`。本文只聚焦 Nav2 导航相关链路；底层 wheel、丝杠等硬件控制不是 Nav2 包的必要组成部分。
@@ -231,6 +231,10 @@ planner_server:
     GridBased:
       plugin: "nav2_custom_planner/CustomPlanner"
       interpolation_resolution: 0.1
+      node_cost_upper_bound: 252.0
+      sight_cost_upper_bound: 180.0
+      cost_penalty_gain: 100.0
+      turn_penalty: 3.0
 ```
 
 ### 功能
@@ -248,8 +252,8 @@ nav2_custom_planner/src/nav2_custom_planner.cpp
 - 使用类似 A* 的搜索生成路径。
 - 使用六邻域扩展 `getHexNeighbors()`。
 - 避开障碍、未知区域和高代价区域。
-- 对高 cost 栅格施加安全惩罚。
-- 对转向施加惩罚，让路径更偏向长直线。
+- 将 traversability layer 写入 `global_costmap` 的软代价转成搜索惩罚。
+- 对转向施加惩罚，让路径更偏向长直线，便于 MPPI 跟踪。
 - 使用视线检测做路径平滑。
 - 按 `interpolation_resolution` 插值输出路径。
 
@@ -258,7 +262,7 @@ nav2_custom_planner/src/nav2_custom_planner.cpp
 ```cpp
 bool CustomPlanner::isNodeValid(unsigned int x, unsigned int y) {
   unsigned char cost = costmap_->getCost(x, y);
-  return (cost < 253 && cost != nav2_costmap_2d::NO_INFORMATION);
+  return (cost <= node_cost_upper_bound_ && cost != nav2_costmap_2d::NO_INFORMATION);
 }
 ```
 
@@ -267,9 +271,20 @@ bool CustomPlanner::isNodeValid(unsigned int x, unsigned int y) {
 ```cpp
 bool CustomPlanner::isSightValid(unsigned int x, unsigned int y) {
   unsigned char cost = costmap_->getCost(x, y);
-  return (cost < 180 && cost != nav2_costmap_2d::NO_INFORMATION);
+  return (cost <= sight_cost_upper_bound_ && cost != nav2_costmap_2d::NO_INFORMATION);
 }
 ```
+
+代价惩罚核心逻辑：
+
+```cpp
+double CustomPlanner::getTraversalPenalty(unsigned int x, unsigned int y) const {
+  const double normalized_cost = static_cast<double>(costmap_->getCost(x, y)) / 254.0;
+  return normalized_cost * normalized_cost * cost_penalty_gain_;
+}
+```
+
+也就是说，全局规划器现在会显式利用 `nav2_traversability_layer` 写入的软代价，而不是只把它当作“非致命障碍”略过。
 
 ### 接口
 
@@ -389,9 +404,58 @@ traversability_layer:
 
 局部使用 `reset_each_update: True`，避免动态障碍残留。全局使用 `reset_each_update: False`，让全局规划器能看到已观测区域的实时更新，同时通过衰减机制逐步清除旧观测，减轻动态障碍残留对全局规划的影响。
 
-## nav2_custom_controller
+## 局部控制器（当前默认：Nav2 MPPI）
 
-`nav2_custom_controller` 是局部控制器插件包。
+当前 `controller_server` 已切换到 Nav2 官方 `MPPIController`，不再默认使用 `nav2_custom_controller`。
+
+启用位置：
+
+```yaml
+controller_server:
+  ros__parameters:
+    controller_frequency: 15.0
+    controller_plugins: ["FollowPath"]
+
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      motion_model: "DiffDrive"
+      time_steps: 40
+      model_dt: 0.05
+      batch_size: 1000
+      vx_max: 0.12
+      wz_max: 0.80
+```
+
+### 为什么这里改成 MPPI
+
+- `local_costmap` 已经有 `nav2_traversability_layer` 输出的连续软代价。
+- 自定义 `nav2_custom_controller` 只做“找前视点 + 原地转向/直行”，不会用 local costmap 做轨迹采样和碰撞代价优化。
+- MPPI 会直接读取 `controller_server` 注入的 local costmap，并通过 critics 对候选轨迹打分，更适合利用地形代价场做局部避障。
+
+### 当前 MPPI 关键 critics
+
+- `CostCritic`：直接消费局部 costmap 的代价值，软约束远离高 traversability cost 区域。
+- `ObstaclesCritic`：对碰撞和贴边进行强惩罚。
+- `PathAlignCritic` / `PathFollowCritic`：保持跟踪全局路径，不轻易跑飞。
+- `GoalCritic` / `GoalAngleCritic`：保证末端收敛到目标位置和目标朝向。
+- `PreferForwardCritic`：降低不必要的后退倾向。
+
+### 当前局部规划数据流
+
+```text
+/cloud_registered_body_1
+  -> nav2_traversability_layer
+  -> local_costmap
+  -> controller_server(MPPI)
+  -> velocity_smoother
+  -> /cmd_vel
+```
+
+这条链路里，`nav2_traversability_layer` 不需要直接和 MPPI 通信。它只要把代价稳定写进 local costmap，MPPI 的 `CostCritic` / `ObstaclesCritic` 就会自动消费这些代价。
+
+## nav2_custom_controller（保留但当前不默认启用）
+
+`nav2_custom_controller` 仍然保留在仓库中，方便回退或对比测试。
 
 插件导出文件：
 
@@ -405,7 +469,7 @@ nav2_custom_controller/nav2_custom_controller.xml
 nav2_custom_controller::CustomController
 ```
 
-在 `nav2_params.yaml` 中启用：
+原始启用方式：
 
 ```yaml
 controller_server:
@@ -502,83 +566,14 @@ geometry_msgs::msg::TwistStamped computeVelocityCommands(
 - 该 layer 同时输出台阶/坡度软代价和硬障碍代价。
 - 全局规划器从 `global_costmap` 读代价，因此重新规划时会考虑实时地形更新。
 
-但是当前 `nav2_custom_controller` 仍然不是真正的采样式局部避障器。它的 `computeVelocityCommands()` 里没有读取 local costmap 做碰撞检测、轨迹采样或速度优化，只是沿路径转向和直行。若要充分利用 traversability costmap，建议将局部控制器替换为 MPPI。
+当前默认配置下，局部避障已经由 MPPI 负责，不再依赖 `nav2_custom_controller`。
 
 因此动态避障能力可以概括为：
 
 - 静态可通行性地图避障：支持。
 - 3D 点云地形代价写入 local/global costmap：支持。
 - 全局重新规划绕障/绕不可通行地形：支持。
-- 当前自定义局部控制器实时绕障：能力较弱。
-- MPPI 接入后，可更好利用连续代价场做局部避障。
-
-## 更换局部规划器为 MPPI
-
-可以更换为 MPPI，前提是系统安装了 `nav2_mppi_controller`，并且 Nav2 版本支持对应插件。
-
-MPPI 作为 Nav2 controller 插件，替换后仍然通过 Nav2 的 `cmd_vel` 输出速度命令。实际速度下发只需要保证有合适的消费方订阅 `cmd_vel`，不要求接入 wheel 或丝杠节点。
-
-### 配置替换位置
-
-修改：
-
-```text
-nav2_nav/config/nav2_params.yaml
-```
-
-把当前控制器：
-
-```yaml
-controller_plugins: ["FollowPath"]
-
-FollowPath:
-  plugin: "nav2_custom_controller::CustomController"
-  max_linear_speed: 0.10
-  max_angular_speed: 0.70
-  lookahead_dist: 0.80
-```
-
-替换为 MPPI 控制器配置。示例：
-
-```yaml
-controller_plugins: ["FollowPath"]
-
-FollowPath:
-  plugin: "nav2_mppi_controller::MPPIController"
-  time_steps: 40
-  model_dt: 0.05
-  batch_size: 1000
-  vx_std: 0.2
-  wz_std: 0.4
-  vx_max: 0.20
-  vx_min: -0.01
-  vy_max: 0.0
-  wz_max: 0.8
-  motion_model: "DiffDrive"
-  visualize: false
-```
-
-实际使用时还需要补齐 MPPI critics，例如：
-
-- `ConstraintCritic`
-- `ObstaclesCritic`
-- `GoalCritic`
-- `GoalAngleCritic`
-- `PathAlignCritic`
-- `PathFollowCritic`
-- `PathAngleCritic`
-- `PreferForwardCritic`
-
-建议先使用保守速度：
-
-```yaml
-vx_max: 0.10
-wz_max: 0.70
-```
-
-确认车体、TF、costmap 和雷达数据稳定后，再逐步增大速度和调整 critics 权重。
-
-### 替换 MPPI 后的注意事项
+### MPPI 使用注意事项
 
 1. `local_costmap` 必须稳定更新，否则 MPPI 无法可靠避障。
 2. `/cloud_registered_body_1` 的 frame 必须能通过 TF 转到 `odom`/`map`。
@@ -606,10 +601,13 @@ wz_max: 0.70
 | 机器人半径 | `robot_radius` | `0.28m` |
 | 膨胀半径 | `inflation_radius` | `0.35m` |
 | 全局规划器 | `planner_server.GridBased.plugin` | `nav2_custom_planner/CustomPlanner` |
-| 局部控制器 | `controller_server.FollowPath.plugin` | `nav2_custom_controller::CustomController` |
-| 控制频率 | `controller_frequency` | `10Hz` |
-| 最大线速度 | `FollowPath.max_linear_speed` | `0.10m/s` |
-| 最大角速度 | `FollowPath.max_angular_speed` | `0.70rad/s` |
+| 局部控制器 | `controller_server.FollowPath.plugin` | `nav2_mppi_controller::MPPIController` |
+| 控制频率 | `controller_frequency` | `15Hz` |
+| 最大线速度 | `FollowPath.vx_max` | `0.12m/s` |
+| 最大角速度 | `FollowPath.wz_max` | `0.80rad/s` |
+| MPPI 采样步数 | `FollowPath.time_steps` | `40` |
+| MPPI 轨迹时间分辨率 | `FollowPath.model_dt` | `0.05s` |
+| MPPI 采样批量 | `FollowPath.batch_size` | `1000` |
 | 速度平滑里程计 | `velocity_smoother.odom_topic` | `/Odometry_loc` |
 
 ## 调试命令
