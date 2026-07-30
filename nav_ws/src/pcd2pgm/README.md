@@ -18,7 +18,7 @@
 2. 每个栅格用 `ground_percentile` 估计地面高度，减少噪点影响。
 3. 在地面上方 `robot_body_height` 范围内统计障碍候选比例，避免把高处天花板直接当作地面障碍。
 4. 用邻域地面高度拟合局部坡面，先得到整体坡度，再用相对坡面的残差高度差判断台阶/障碍。
-5. 对小面积无观测栅格做反距离插值补全。
+5. 对小面积无观测栅格按 `hole_fill_mode` 保持未知、填中间代价或做反距离插值补全。
 6. 按 OccupancyGrid 标准输出 `-1/0..100`：`-1` unknown，`0` free，`100` occupied，中间值为灰度代价。
 7. 对占用栅格执行 `obstacle_inflation_radius` 离线膨胀，保存 PGM 的方式不变。
 
@@ -105,7 +105,11 @@ ros2 run nav2_map_server map_saver_cli -f ~/maps/test_map --ros-args -r map:=/te
 | `allow_low_step_slope_bypass` | 低矮台阶是否绕过坡度致命判定 |
 | `low_step_slope_bypass_height` | 低矮台阶坡度绕过高度，`0` 表示使用 `max_step_height` |
 | `step_cost_max` | 非致命可通行代价上限，建议小于 `65` |
-| `interp_search_radius` | 小洞插值半径，单位栅格 |
+| `hole_fill_mode` | 空洞处理模式：`unknown`、`cost`、`interpolate` |
+| `hole_fill_radius` | `cost` 模式下内部空洞搜索半径，单位栅格 |
+| `hole_fill_min_neighbors` | `cost` 模式下判定内部空洞所需的最少有效邻居 |
+| `hole_fill_cost` | `cost` 模式下填入的中间代价，会被限制到 `step_cost_max` 以内 |
+| `interp_search_radius` | `interpolate` 模式下小洞插值半径，单位栅格 |
 | `obstacle_inflation_radius` | 离线障碍膨胀半径，单位栅格 |
 | `map_resolution` | 输出地图分辨率 |
 | `map_topic_name` | OccupancyGrid 输出 topic，默认 `map` |
@@ -115,8 +119,39 @@ ros2 run nav2_map_server map_saver_cli -f ~/maps/test_map --ros-args -r map:=/te
 - 室内有天花板误判时，增大 `robot_body_height` 不能解决问题，应确保 `analysis_z_max` 不低于机器人高度，但障碍判断主要依赖地面上方 `robot_body_height` 内的点。
 - 地图过于保守时，适当增大 `max_step_height`、`max_slope_traversable`，或减小 `obstacle_inflation_radius`。
 - 台阶/坡道被误判为可通行时，减小 `max_step_height` 或 `max_slope_traversable`。
-- 小洞过多时，增大 `interp_search_radius`；若插值导致未知区域过多变为可通行，减小该值或增大 `min_interp_neighbors`。
+- 原始点云有空洞时，优先使用 `hole_fill_mode: cost`，它只给被有效栅格包围的内部空洞填中间代价，不会把地图外侧大面积未知区域直接变成可通行。
+- 希望空洞继续被导航系统当成未知区域时，使用 `hole_fill_mode: unknown`。
+- 希望小洞按周围地形估计高度时，使用 `hole_fill_mode: interpolate`，再调 `interp_search_radius` 和 `min_interp_neighbors`；如果插值导致未知区域过多变为可通行，减小半径或增大邻居数。
 - 多段拼接点云在地面下方出现重影层时，使用 `ground_estimation_method: upper_densest`，并把 `ground_cluster_tolerance` 设得略小于两层重影的 Z 间距。
+
+## 空洞填充
+
+点云稀疏或拼接不完整时，PGM 中无点区域会输出为 `-1 unknown`。如果这些洞出现在已观测区域内部，规划时可能表现为断裂或局部绕行。当前提供三种处理方式：
+
+```yaml
+hole_fill_mode: cost
+hole_fill_radius: 3
+hole_fill_min_neighbors: 8
+hole_fill_cost: 45
+```
+
+`cost` 模式会在输出地图后扫描 unknown 栅格；如果某个 unknown 栅格在 `hole_fill_radius` 半径内有足够多的有效邻居，就认为它是内部空洞，并写成 `hole_fill_cost`。这个值建议保持在 `35~55`，通常低于 `65`，这样保存 PGM 时不会被默认 occupied 阈值写成黑色障碍。
+
+如果你的规划器希望严格避开所有无观测区域，设为：
+
+```yaml
+hole_fill_mode: unknown
+```
+
+如果空洞很小，并且希望根据周边坡面继续计算可通行代价，设为：
+
+```yaml
+hole_fill_mode: interpolate
+interp_search_radius: 3
+min_interp_neighbors: 4
+```
+
+`interpolate` 会先估计空洞处的地面高度，再参与坡度/高差代价计算；它更适合连续地面上的小缺点，不适合大面积未扫描区域。
 
 ## 低矮台阶误判排查
 

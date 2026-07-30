@@ -96,6 +96,10 @@ private:
   int min_slope_fit_neighbors_;
   bool allow_low_step_slope_bypass_;
   float low_step_slope_bypass_height_;
+  std::string hole_fill_mode_;
+  int hole_fill_radius_;
+  int hole_fill_min_neighbors_;
+  int hole_fill_cost_;
   int interp_search_radius_;
   int min_interp_neighbors_;
   int obstacle_inflation_radius_;

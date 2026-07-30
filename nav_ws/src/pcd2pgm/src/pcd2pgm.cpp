@@ -158,6 +158,10 @@ void Pcd2PgmNode::declareParameters()
   declare_parameter("min_slope_fit_neighbors", 5);
   declare_parameter("allow_low_step_slope_bypass", true);
   declare_parameter("low_step_slope_bypass_height", 0.0);
+  declare_parameter("hole_fill_mode", "unknown");
+  declare_parameter("hole_fill_radius", 3);
+  declare_parameter("hole_fill_min_neighbors", 8);
+  declare_parameter("hole_fill_cost", 45);
   declare_parameter("interp_search_radius", 3);
   declare_parameter("min_interp_neighbors", 2);
   declare_parameter("obstacle_inflation_radius", 1);
@@ -202,6 +206,10 @@ void Pcd2PgmNode::getParameters()
   get_parameter("min_slope_fit_neighbors", min_slope_fit_neighbors_);
   get_parameter("allow_low_step_slope_bypass", allow_low_step_slope_bypass_);
   get_parameter("low_step_slope_bypass_height", low_step_slope_bypass_height_);
+  get_parameter("hole_fill_mode", hole_fill_mode_);
+  get_parameter("hole_fill_radius", hole_fill_radius_);
+  get_parameter("hole_fill_min_neighbors", hole_fill_min_neighbors_);
+  get_parameter("hole_fill_cost", hole_fill_cost_);
   get_parameter("interp_search_radius", interp_search_radius_);
   get_parameter("min_interp_neighbors", min_interp_neighbors_);
   get_parameter("obstacle_inflation_radius", obstacle_inflation_radius_);
@@ -222,6 +230,9 @@ void Pcd2PgmNode::getParameters()
   }
   slope_fit_radius_ = std::max(1, slope_fit_radius_);
   min_slope_fit_neighbors_ = std::max(3, min_slope_fit_neighbors_);
+  hole_fill_radius_ = std::max(0, hole_fill_radius_);
+  hole_fill_min_neighbors_ = std::max(1, hole_fill_min_neighbors_);
+  hole_fill_cost_ = std::min(clampOccupancy(hole_fill_cost_), step_cost_max_);
   interp_search_radius_ = std::max(0, interp_search_radius_);
   min_interp_neighbors_ = std::max(1, min_interp_neighbors_);
   obstacle_inflation_radius_ = std::max(0, obstacle_inflation_radius_);
@@ -563,7 +574,7 @@ void Pcd2PgmNode::setTerrainMapTopicMsg(
 
   }
 
-  if (interp_search_radius_ > 0) {
+  if (hole_fill_mode_ == "interpolate" && interp_search_radius_ > 0) {
     auto interpolated = cells;
     for (int j = 0; j < height; ++j) {
       for (int i = 0; i < width; ++i) {
@@ -769,6 +780,57 @@ void Pcd2PgmNode::setTerrainMapTopicMsg(
       }
       msg.data[idx] = static_cast<int8_t>(occupancy);
     }
+  }
+
+  if (hole_fill_mode_ == "cost" && hole_fill_radius_ > 0) {
+    int filled_holes = 0;
+    for (int j = 0; j < height; ++j) {
+      for (int i = 0; i < width; ++i) {
+        const size_t idx = static_cast<size_t>(index2d(i, j, width));
+        if (msg.data[idx] >= 0) {
+          continue;
+        }
+
+        int valid_neighbors = 0;
+        int lethal_neighbors = 0;
+        for (int dy = -hole_fill_radius_; dy <= hole_fill_radius_; ++dy) {
+          for (int dx = -hole_fill_radius_; dx <= hole_fill_radius_; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int nx = i + dx;
+            const int ny = j + dy;
+            if (!isInside(nx, ny, width, height)) {
+              continue;
+            }
+            const float dist = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+            if (dist > static_cast<float>(hole_fill_radius_)) {
+              continue;
+            }
+
+            const auto neighbor_value = msg.data[static_cast<size_t>(index2d(nx, ny, width))];
+            if (neighbor_value < 0) {
+              continue;
+            }
+            ++valid_neighbors;
+            if (neighbor_value >= 100) {
+              ++lethal_neighbors;
+            }
+          }
+        }
+
+        if (valid_neighbors >= hole_fill_min_neighbors_ && lethal_neighbors < valid_neighbors) {
+          msg.data[idx] = static_cast<int8_t>(hole_fill_cost_);
+          ++filled_holes;
+        }
+      }
+    }
+    RCLCPP_INFO(
+      get_logger(), "Filled %d internal unknown cells with cost=%d", filled_holes, hole_fill_cost_);
+  } else if (hole_fill_mode_ != "unknown" && hole_fill_mode_ != "interpolate") {
+    RCLCPP_WARN(
+      get_logger(), "Unknown hole_fill_mode '%s'. Valid values: unknown, cost, interpolate",
+      hole_fill_mode_.c_str());
   }
 
   if (obstacle_inflation_radius_ > 0) {

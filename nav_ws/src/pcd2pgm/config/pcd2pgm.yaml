@@ -1,7 +1,7 @@
 pcd2pgm:
   ros__parameters:
     # 输入点云文件路径，支持 .pcd 和 .ply；只改变这里即可切换待转换点云。
-    input_file: "/home/blacklily/saved_maps/cleaned.pcd"
+    input_file: "/home/blacklily/saved_maps/1_cleaned.pcd"
 
     # 点云外参修正 [x, y, z, roll, pitch, yaw]，单位分别为 m/rad。
     #把输入 PCD 从雷达/里程计相关坐标系修正到 map 栅格生成所需要的坐标姿态。
@@ -46,7 +46,7 @@ pcd2pgm:
     robot_body_height: 1.2
 
     # 高于地面多少才开始视为障碍候选，过滤地面粗糙度和轻微噪声。
-    obstacle_min_height: 0.06
+    obstacle_min_height: 0.05
 
     # 障碍候选中超过 max_step_height 的比例阈值；比例和高度同时满足时标记占用。
     obstacle_ratio_threshold: 0.18
@@ -58,7 +58,7 @@ pcd2pgm:
     slope_cost_start: 20.0
 
     # 高差/障碍高度超过该值后开始产生灰度代价，单位 m；不要设到 max_step_height，否则低矮台阶不会产生渐进代价。
-    height_cost_start: 0.06
+    height_cost_start: 0.05
 
     # 是否启用坡面补偿台阶检测；true 时先拟合局部坡面，再用相对坡面的残差高度判断台阶/障碍。
     slope_compensation_enabled: true
@@ -83,8 +83,23 @@ pcd2pgm:
     height_cost_scale: 1.0
     slope_cost_scale: 1.0
 
-    # 对无点的小洞做反距离插值补全；半径单位为栅格，0 表示关闭。
-    interp_search_radius: 0
+    # 空洞填充模式：
+    # unknown: 无点区域保持 unknown，不主动填充。
+    # cost: 只对被有效栅格包围的内部空洞填固定中间代价，地图边界外仍保持 unknown。
+    # interpolate: 对小洞做地面高度插值，再按可通行低/中代价输出。
+    hole_fill_mode: cost
+
+    # cost 模式下搜索周围有效栅格的半径，单位栅格；值越大，可填的洞越大。
+    hole_fill_radius: 3
+
+    # cost 模式下，周围至少有多少有效栅格才认为这是内部空洞，而不是地图外部未知。
+    hole_fill_min_neighbors: 8
+
+    # cost 模式下写入的中间代价；建议低于 65，避免保存 PGM 时被当成黑色占用。
+    hole_fill_cost: 45
+
+    # interpolate 模式下对无点小洞做反距离地面插值的半径；单位为栅格，0 表示关闭。
+    interp_search_radius: 3
 
     # 插值所需的最少有效邻居数量。
     min_interp_neighbors: 4
