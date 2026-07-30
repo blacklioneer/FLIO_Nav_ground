@@ -1,0 +1,10 @@
+<library path="nav2_traversability_layer_plugin">
+  <class
+    name="nav2_traversability_layer::TraversabilityLayer"
+    type="nav2_traversability_layer::TraversabilityLayer"
+    base_class_type="nav2_costmap_2d::Layer">
+    <description>
+      PointCloud2-based traversability costmap layer for legged robots.
+    </description>
+  </class>
+</library>

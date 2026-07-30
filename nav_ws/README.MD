@@ -413,7 +413,7 @@ traversability_layer:
 ```yaml
 controller_server:
   ros__parameters:
-    controller_frequency: 15.0
+    controller_frequency: 20.0
     controller_plugins: ["FollowPath"]
 
     FollowPath:
@@ -577,7 +577,7 @@ geometry_msgs::msg::TwistStamped computeVelocityCommands(
 
 1. `local_costmap` 必须稳定更新，否则 MPPI 无法可靠避障。
 2. `/cloud_registered_body_1` 的 frame 必须能通过 TF 转到 `odom`/`map`。
-3. `map -> odom -> base_link` TF 必须连续。
+3. 当前定位链路使用 `map -> odom -> camera_init -> body`，Nav2 的 `robot_base_frame` 必须使用 `body`。
 4. `cmd_vel` 输出频率要和实际速度消费方的控制频率匹配。
 5. 当前 `velocity_smoother.feedback` 是 `OPEN_LOOP`，如果底盘里程计稳定，可评估改成闭环反馈。
 6. MPPI 比当前自定义控制器更吃 CPU，Jetson 上要控制 `batch_size`、`time_steps` 和控制频率。
@@ -587,8 +587,9 @@ geometry_msgs::msg::TwistStamped computeVelocityCommands(
 | 功能 | 配置位置 | 当前值 |
 | --- | --- | --- |
 | 全局坐标系 | `bt_navigator.global_frame` | `map` |
-| 机器人坐标系 | `bt_navigator.robot_base_frame` | `base_link` |
+| 机器人坐标系 | `bt_navigator.robot_base_frame` | `body` |
 | 里程计话题 | `bt_navigator.odom_topic` | `/Odometry_loc` |
+| 仿真时钟 | `nav2.launch.py use_sim_time` | `true` |
 | 地图文件 | `nav2.launch.py` 默认 `map` | `maps/test_map.yaml` |
 | 局部 costmap frame | `local_costmap.global_frame` | `odom` |
 | 全局 costmap frame | `global_costmap.global_frame` | `map` |
@@ -602,7 +603,7 @@ geometry_msgs::msg::TwistStamped computeVelocityCommands(
 | 膨胀半径 | `inflation_radius` | `0.35m` |
 | 全局规划器 | `planner_server.GridBased.plugin` | `nav2_custom_planner/CustomPlanner` |
 | 局部控制器 | `controller_server.FollowPath.plugin` | `nav2_mppi_controller::MPPIController` |
-| 控制频率 | `controller_frequency` | `15Hz` |
+| 控制频率 | `controller_frequency` | `20Hz` |
 | 最大线速度 | `FollowPath.vx_max` | `0.12m/s` |
 | 最大角速度 | `FollowPath.wz_max` | `0.80rad/s` |
 | MPPI 采样步数 | `FollowPath.time_steps` | `40` |
