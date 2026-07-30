@@ -1,6 +1,6 @@
 bt_navigator:
   ros__parameters:
-    use_sim_time: False              # 是否使用仿真时钟，真机一般为 False
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     global_frame: map                # Nav2 全局参考坐标系，通常由定位系统发布 map->odom
     robot_base_frame: body           # 机器人本体坐标系；当前定位和点云都以 body 为机器人基坐标系
     odom_topic: /Odometry_loc        # 里程计话题，供行为树和导航状态判断使用
@@ -59,15 +59,15 @@ bt_navigator:
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
-    use_sim_time: False              # navigate_through_poses 对应内部 rclcpp node 的时钟配置
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
 
 bt_navigator_navigate_to_pose_rclcpp_node:
   ros__parameters:
-    use_sim_time: False              # navigate_to_pose 对应内部 rclcpp node 的时钟配置
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
 
 controller_server:
   ros__parameters:
-    use_sim_time: False                   # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     controller_frequency: 20.0           # 控制器主循环频率，单位 Hz；MPPI 要求周期不能大于 model_dt
     min_x_velocity_threshold: 0.001      # 低于该值的 x 速度视为 0，避免数值噪声
     min_y_velocity_threshold: 0.5        # 低于该值的 y 速度视为 0；当前 DiffDrive 实际不会输出 y
@@ -132,7 +132,7 @@ controller_server:
         cost_weight: 3.5            # costmap 软代价权重，直接影响绕开高 traversability cost 的倾向
         critical_cost: 300.0        # 临界高代价阈值，超过后会更强烈惩罚
         collision_cost: 1000000.0   # 发生碰撞时代价，通常给极大值
-        consider_footprint: false   # 当前只配置 robot_radius，未配置多边形 footprint，按圆形模型检查更稳定
+        consider_footprint: true    # 使用 costmap 中配置的多边形 footprint 做碰撞检查
         near_goal_distance: 0.5     # 距离目标 0.5m 内弱化该 critic，避免终点附近过度绕行
       ObstaclesCritic:
         enabled: true                    # 是否启用障碍物 critic
@@ -141,7 +141,7 @@ controller_server:
         critical_weight: 20.0            # 接近危险区域时的强惩罚权重
         collision_cost: 1000000.0        # 碰撞代价，极大值
         collision_margin_distance: 0.15  # 与障碍保持的安全边界距离，单位 m
-        consider_footprint: false        # 当前只配置 robot_radius，未配置多边形 footprint，按圆形模型检查更稳定
+        consider_footprint: true         # 使用 costmap 中配置的多边形 footprint 做碰撞检查
         near_goal_distance: 0.5          # 距终点很近时弱化该 critic
       GoalCritic:
         enabled: true               # 是否启用终点位置吸引 critic
@@ -180,12 +180,13 @@ local_costmap:
       publish_frequency: 2.0              # 局部代价地图发布频率，单位 Hz
       global_frame: odom                  # 局部代价地图所处坐标系，通常使用 odom
       robot_base_frame: body              # 机器人本体坐标系；直接接入 odom -> camera_init -> body 定位链
-      use_sim_time: False                 # 是否使用仿真时钟
+      use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
       rolling_window: true                # 是否使用滚动窗口局部地图
       width: 3                            # 局部地图宽度，单位 m
       height: 3                           # 局部地图高度，单位 m
       resolution: 0.05                    # 栅格分辨率，单位 m/cell
-      robot_radius: 0.28                  # 机器人近似半径，供碰撞和膨胀计算使用
+      # robot_radius: 0.28                # 圆形机器人模型；启用 footprint 后不要同时启用
+      footprint: "[[0.30, 0.225], [0.30, -0.225], [-0.30, -0.225], [-0.30, 0.225]]" # 矩形 footprint，单位 m；当前为长 0.60m、宽 0.45m
       plugins: ["traversability_layer", "inflation_layer"]  # 局部地图插件顺序
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"  # 障碍膨胀层
@@ -227,8 +228,9 @@ global_costmap:
       publish_frequency: 2.0              # 全局代价地图发布频率，单位 Hz
       global_frame: map                   # 全局代价地图坐标系，必须与规划器一致
       robot_base_frame: body              # 机器人本体坐标系；直接接入 map/odom -> body 定位链
-      use_sim_time: False                 # 是否使用仿真时钟
-      robot_radius: 0.28                  # 机器人半径
+      use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
+      # robot_radius: 0.28                # 圆形机器人模型；启用 footprint 后不要同时启用
+      footprint: "[[0.30, 0.225], [0.30, -0.225], [-0.30, -0.225], [-0.30, 0.225]]" # 矩形 footprint，单位 m；当前为长 0.60m、宽 0.45m
       resolution: 0.05                    # 全局地图分辨率
       track_unknown_space: true           # 是否保留未知区域语义；全局规划通常建议开启
       plugins: ["static_layer", "traversability_layer", "inflation_layer"] # 全局代价地图插件顺序
@@ -270,13 +272,13 @@ global_costmap:
 
 map_server:
   ros__parameters:
-    use_sim_time: False       # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     yaml_filename: ""         # 地图 yaml 文件路径；通常由 launch 文件传入
 
 planner_server:
   ros__parameters:
     expected_planner_frequency: 20.0    # 期望全局规划频率，单位 Hz
-    use_sim_time: False                 # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     planner_plugins: ["GridBased"]      # 加载的全局规划器列表
     GridBased:
       plugin: "nav2_custom_planner/CustomPlanner" # 自定义全局规划器插件
@@ -288,7 +290,7 @@ planner_server:
 
 smoother_server:
   ros__parameters:
-    use_sim_time: False                      # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     smoother_plugins: ["simple_smoother"]    # 路径平滑器列表
     simple_smoother:
       plugin: "nav2_smoother::SimpleSmoother" # 官方简单路径平滑器
@@ -315,7 +317,7 @@ behavior_server:
     global_frame: odom                           # 行为服务器使用的参考坐标系
     robot_base_frame: body                       # 机器人基坐标系
     transform_tolerance: 0.1                     # TF 容差，单位 s
-    use_sim_time: False                          # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     simulate_ahead_time: 2.0                     # 行为仿真前视时间，单位 s
     max_rotational_vel: 1.0                      # 恢复行为允许的最大角速度
     min_rotational_vel: 0.4                      # 恢复行为允许的最小角速度
@@ -323,11 +325,11 @@ behavior_server:
 
 robot_state_publisher:
   ros__parameters:
-    use_sim_time: False   # robot_state_publisher 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
 
 waypoint_follower:
   ros__parameters:
-    use_sim_time: False                           # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     loop_rate: 20                                 # waypoint 跟随循环频率，单位 Hz
     stop_on_failure: false                        # 某个 waypoint 失败后是否立刻停止整个任务
     waypoint_task_executor_plugin: "wait_at_waypoint" # 每个 waypoint 到达后执行的任务插件
@@ -338,7 +340,7 @@ waypoint_follower:
 
 velocity_smoother:
   ros__parameters:
-    use_sim_time: False                 # 是否使用仿真时钟
+    use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     smoothing_frequency: 20.0           # 速度平滑器输出频率，单位 Hz
     scale_velocities: False             # 是否按比例整体缩放速度；False 表示独立限幅
     feedback: "OPEN_LOOP"               # 开环模式，不依赖底盘反馈速度闭环修正

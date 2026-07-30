@@ -3,8 +3,8 @@ import launch
 from ament_index_python.packages import get_package_share_directory
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
-from launch_ros.actions import Node
-from launch_ros.actions import Node as RosNode
+from launch.event_handlers import OnShutdown
+from launch_ros.actions import Node, SetParameter
 
 def generate_launch_description():
     # 获取目录
@@ -13,7 +13,8 @@ def generate_launch_description():
     
     rviz_config_dir = os.path.join(nav2_nav_dir, 'rviz', 'my_nav2_view.rviz')
     
-    # 获取 Launch 配置参数
+    # 统一时钟开关：仿真/Gazebo 使用 true，真机且无 /clock 时使用 false。
+    # 该参数会下发给 map_server、Nav2 组件、RViz，并通过 navigation_launch.py 覆盖参数文件。
     use_sim_time = launch.substitutions.LaunchConfiguration('use_sim_time', default='true')
     # 【新增】：控制是否启动 RViz 的开关，默认设置为 'False'
     use_rviz1 = launch.substitutions.LaunchConfiguration('use_rviz1', default='False')
@@ -23,13 +24,14 @@ def generate_launch_description():
         'map', default=os.path.join(nav2_nav_dir, 'maps', 'test_map.yaml'))
     nav2_param_path = launch.substitutions.LaunchConfiguration(
         'params_file', default=os.path.join(nav2_nav_dir, 'config', 'nav2_params.yaml'))
+    shutdown_timeout = '2.0'
 
     return launch.LaunchDescription([
         # =========================================================
         # 0. 声明 Launch 参数，方便外部调用时修改
         # =========================================================
         launch.actions.DeclareLaunchArgument('use_sim_time', default_value='true',
-                                             description='Use simulation (Gazebo) clock if true'),
+                                             description='Single clock switch for Nav2, RViz, map_server and path timestamps. Use true with /clock; false on real robot without /clock.'),
         launch.actions.DeclareLaunchArgument('map', default_value=map_yaml_path,
                                              description='Full path to map file to load'),
         launch.actions.DeclareLaunchArgument('params_file', default_value=nav2_param_path,
@@ -37,6 +39,15 @@ def generate_launch_description():
         # 声明 use_rviz1 参数，明确告诉用户这个参数的作用
         launch.actions.DeclareLaunchArgument('use_rviz1', default_value='False',
                                              description='Whether to start RViz2 on the robot (default: False for headless Jetson)'),
+        launch.actions.RegisterEventHandler(
+            OnShutdown(
+                on_shutdown=[
+                    launch.actions.LogInfo(msg='Shutting down nav2_nav launch: map_server, Nav2 container, and RViz will be stopped.')
+                ]
+            )
+        ),
+        # Launch 级统一设置；各 Node 仍显式传入该参数，避免组合式启动或外部 include 漏掉。
+        SetParameter(name='use_sim_time', value=use_sim_time),
 
         # =========================================================
         # 1. 单独启动 Map Server (提供全局 2D 代价底图)
@@ -46,7 +57,9 @@ def generate_launch_description():
             executable='map_server',
             name='map_server',
             output='screen',
-            parameters=[{'yaml_filename': map_yaml_path, 'use_sim_time': use_sim_time}]
+            parameters=[{'yaml_filename': map_yaml_path, 'use_sim_time': use_sim_time}],
+            sigterm_timeout=shutdown_timeout,
+            sigkill_timeout=shutdown_timeout
         ),
         Node(
             package='nav2_lifecycle_manager',
@@ -55,7 +68,9 @@ def generate_launch_description():
             output='screen',
             parameters=[{'use_sim_time': use_sim_time},
                         {'autostart': True},
-                        {'node_names': ['map_server']}]
+                        {'node_names': ['map_server']}],
+            sigterm_timeout=shutdown_timeout,
+            sigkill_timeout=shutdown_timeout
         ),
 
         # =========================================================
@@ -64,14 +79,16 @@ def generate_launch_description():
         # MPPI 在当前 Humble + 非组合式 navigation_launch 路径下触发了
         # controller_server / local_costmap 的 executor 冲突。
         # 这里切回 Nav2 官方更稳定的 composed bringup 方式。
-        RosNode(
+        Node(
             package='rclcpp_components',
             executable='component_container_isolated',
             name='nav2_container',
             output='screen',
             parameters=[nav2_param_path, {'autostart': True, 'use_sim_time': use_sim_time}],
             arguments=['--ros-args', '--log-level', 'info'],
-            remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')]
+            remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')],
+            sigterm_timeout=shutdown_timeout,
+            sigkill_timeout=shutdown_timeout
         ),
 
         # =========================================================
@@ -83,7 +100,8 @@ def generate_launch_description():
                 'use_sim_time': use_sim_time,
                 'params_file': nav2_param_path,
                 'use_composition': 'True',
-                'container_name': 'nav2_container'}.items(),
+                'container_name': 'nav2_container',
+                'use_respawn': 'False'}.items(),
         ),
 
         # =========================================================
@@ -96,6 +114,8 @@ def generate_launch_description():
             arguments=['-d', rviz_config_dir],
             parameters=[{'use_sim_time': use_sim_time}],
             output='screen',
+            sigterm_timeout=shutdown_timeout,
+            sigkill_timeout=shutdown_timeout,
             # 条件锁！如果没传 use_rviz1:=True，不会运行
             condition=IfCondition(use_rviz1)
         ),

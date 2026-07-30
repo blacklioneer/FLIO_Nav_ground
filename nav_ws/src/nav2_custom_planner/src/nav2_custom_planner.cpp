@@ -92,7 +92,10 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
                                               const geometry_msgs::msg::PoseStamped &goal) {
   nav_msgs::msg::Path global_path;
   global_path.poses.clear();
-  global_path.header.stamp = node_->now();
+  // Use the planner node clock for every path stamp. In simulation this is ROS time; copying
+  // RViz goal stamps can inject system time and make the controller's map->odom transform fail.
+  const auto plan_stamp = node_->now();
+  global_path.header.stamp = plan_stamp;
   global_path.header.frame_id = global_frame_;
 
   if (start.header.frame_id != global_frame_ || goal.header.frame_id != global_frame_) 
@@ -144,7 +147,7 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
       geometry_msgs::msg::PoseStamped pose; double wx, wy;
       costmap_->mapToWorld(current_node->x, current_node->y, wx, wy);
       pose.pose.position.x = wx; pose.pose.position.y = wy; pose.pose.position.z = 0.0;
-      pose.header.stamp = node_->now(); pose.header.frame_id = global_frame_;
+      pose.header.stamp = plan_stamp; pose.header.frame_id = global_frame_;
       reverse_path.push_back(pose);
       current_node = current_node->parent;
     }
@@ -188,8 +191,13 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
       global_path.poses = reverse_path; 
     }
 
-    global_path.poses.front() = start; 
-    global_path.poses.back() = goal;   
+    // Preserve exact start/goal poses while normalizing headers to the path time/frame.
+    global_path.poses.front().pose = start.pose;
+    global_path.poses.front().header.stamp = plan_stamp;
+    global_path.poses.front().header.frame_id = global_frame_;
+    global_path.poses.back().pose = goal.pose;
+    global_path.poses.back().header.stamp = plan_stamp;
+    global_path.poses.back().header.frame_id = global_frame_;
     return global_path;
 
   } else {

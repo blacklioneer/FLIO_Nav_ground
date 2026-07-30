@@ -53,6 +53,20 @@ map: nav2_nav/maps/test_map.yaml
 
 `test_map.yaml` 内容：
 
+### 统一时钟参数
+
+所有 Nav2 节点、RViz、map_server 和全局路径时间戳统一由 `nav2.launch.py` 的 `use_sim_time` 控制：
+
+```bash
+# 仿真/Gazebo，有 /clock 时使用
+ros2 launch nav2_nav nav2.launch.py use_sim_time:=true use_rviz1:=True
+
+# 真机且没有 /clock 时使用
+ros2 launch nav2_nav nav2.launch.py use_sim_time:=false use_rviz1:=True
+```
+
+`nav2_params.yaml` 中各节点的 `use_sim_time` 只是默认占位，启动时会被 launch 参数覆盖。自定义全局规划器生成 `nav_msgs/Path` 时使用 planner 节点自己的 clock 给所有 path pose 打时间戳，避免 RViz goal 的系统时间戳混入仿真 TF。
+
 ```yaml
 image: test_map.pgm
 mode: trinary

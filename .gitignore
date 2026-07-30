@@ -23,3 +23,4 @@ orbbecsdk_ws/
 /nav_ws/src/wheel_controller/
 /nav_ws/src/voice_controller/
 /nav_ws/src/robot_display/
+nav_ws/src/nav2_nav/maps/test_map.yaml
