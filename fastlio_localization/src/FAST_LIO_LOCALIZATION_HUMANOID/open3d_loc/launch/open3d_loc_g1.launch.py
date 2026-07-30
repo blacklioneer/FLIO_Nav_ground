@@ -24,7 +24,7 @@ def generate_launch_description():
     ])
 
     # 地图文件路径 - 使用绝对路径指向源码目录中的地图文件
-    map_file = '/home/blacklily/saved_maps/fused_clean.pcd'
+    map_file = '/home/blacklily/saved_maps/1_cleaned.pcd'
 
     # 静态TF发布节点 - camera_init to odom
     static_tf_camera_init2odom = Node(
@@ -33,7 +33,12 @@ def generate_launch_description():
         name='camera_init2odom',
         arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
     )
-
+    static_tf_camera_init2odom = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_init2odom',
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
+    )
     # 静态TF发布节点 - imu_link to base_link
     # 父frame是imu_link，子frame是base_link
     # static_tf_imulink2baselink = Node(
@@ -51,6 +56,15 @@ def generate_launch_description():
         name='base_center_broadcaster',
         arguments=['0', '0', '0', '0', '0', '0',
                    '1', 'base_link', 'motion_link']
+    )
+
+    # 静态TF发布节点 - body to base_link
+    # 当前系统里 body 与 base_link 语义等价，这里显式补一条单位变换给 Nav2 使用
+    static_tf_body_to_base_link = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='body_to_base_link',
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'body', 'base_link']
     )
 
     # 全局定位节点
@@ -156,6 +170,7 @@ def generate_launch_description():
         static_tf_camera_init2odom,
         # static_tf_imulink2baselink,
         static_tf_base_center,
+        static_tf_body_to_base_link,
         global_localization_node,
         # pointcloud_transformer_node #这个节点是3d导航用的 我这个项目是2d的所以注释掉且压缩为laserscan
         # pointcloud_to_laserscan_node

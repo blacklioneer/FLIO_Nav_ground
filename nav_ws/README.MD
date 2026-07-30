@@ -75,6 +75,8 @@ nav2_bringup/launch/navigation_launch.py
 
 这说明当前定位不是 AMCL，而是依赖外部定位系统提供 `map -> odom -> base_link` 相关 TF 和 `/Odometry_loc` 里程计。结合总启动链路看，这部分大概率由 `open3d_loc` 提供。
 
+对于当前这套 FAST-LIO / Open3D 定位链路，`body` 与 `base_link` 语义等价；`open3d_loc_g1.launch.py` 里通过一条单位静态 TF 显式发布 `body -> base_link`，保证 Nav2 能稳定拿到 `odom -> base_link` 这条变换。
+
 ### 主要接口
 
 | 类型 | 名称 | 说明 |
@@ -110,6 +112,7 @@ velocity_smoother:
 局部地图配置在 `local_costmap.local_costmap.ros__parameters`：
 
 ```yaml
+update_frequency: 5.0
 global_frame: odom
 robot_base_frame: base_link
 rolling_window: true
@@ -130,6 +133,7 @@ traversability_layer:
   max_step_height: 0.24
   max_slope_traversable: 38.0
   reset_each_update: True
+  decay_enabled: False
 ```
 
 作用：
@@ -139,6 +143,8 @@ traversability_layer:
 - 对可跨越台阶/可通行坡面输出软代价。
 - 对超过足式机器人能力的台阶、陡坡、密集高障碍输出硬障碍。
 - 通过 `inflation_layer` 给硬障碍膨胀安全距离。
+
+局部 costmap 的计算/刷新频率由 `local_costmap.local_costmap.ros__parameters.update_frequency` 控制，当前配置在 `nav_ws/src/nav2_nav/config/nav2_params.yaml` 中为 `5.0 Hz`。
 
 ### 全局 costmap
 
@@ -158,7 +164,21 @@ plugins: ["static_layer", "traversability_layer", "inflation_layer"]
 - `traversability_layer`：订阅 `/cloud_registered_body_1`，把实时地形代价/硬障碍加入全局 costmap。
 - `inflation_layer`：障碍膨胀。
 
-这意味着全局规划不仅看静态 PGM 地图，也会受实时 3D 点云地形代价影响。当前全局 traversability layer 配置为 `reset_each_update: False`，会累积已观测区域的代价；如果动态障碍残留明显，应改为带衰减机制或仅在局部 costmap 使用实时层。
+这意味着全局规划不仅看静态 PGM 地图，也会受实时 3D 点云地形代价影响。当前全局 traversability layer 配置为 `reset_each_update: False`，会累积已观测区域的代价；同时新增了衰减参数来逐步清除人、箱子这类动态障碍留下的旧代价：
+
+```yaml
+traversability_layer:
+  reset_each_update: False
+  decay_enabled: True
+  decay_rate_per_second: 30.0
+  decay_minimum_cost: 1
+```
+
+其中：
+
+- `decay_enabled`：是否启用累积代价衰减。
+- `decay_rate_per_second`：每秒降低多少代价值。
+- `decay_minimum_cost`：代价值衰减到该阈值及以下时，直接清成 `NO_INFORMATION`。
 
 ### 行为树与恢复行为
 
@@ -337,6 +357,9 @@ pointcloud_topic: /cloud_registered_body_1
 | `hard_slope_limit` | `50.0` | 超过后直接视为硬障碍 |
 | `soft_cost_max` | `200` | 可通行但不理想区域的最高软代价 |
 | `reset_each_update` | local 为 `True`，global 为 `False` | 局部重算，全局累积已观测代价 |
+| `decay_enabled` | local 为 `False`，global 为 `True` | 是否对累积代价执行时间衰减 |
+| `decay_rate_per_second` | global 为 `30.0` | 全局层每秒衰减的代价值 |
+| `decay_minimum_cost` | `1` | 小于等于该值时清为 `NO_INFORMATION` |
 
 ### local/global 使用方式
 
@@ -348,6 +371,7 @@ traversability_layer:
   plugin: "nav2_traversability_layer::TraversabilityLayer"
   pointcloud_topic: /cloud_registered_body_1
   reset_each_update: True
+  decay_enabled: False
 ```
 
 全局 costmap：
@@ -358,9 +382,12 @@ traversability_layer:
   plugin: "nav2_traversability_layer::TraversabilityLayer"
   pointcloud_topic: /cloud_registered_body_1
   reset_each_update: False
+  decay_enabled: True
+  decay_rate_per_second: 30.0
+  decay_minimum_cost: 1
 ```
 
-局部使用 `reset_each_update: True`，避免动态障碍残留。全局使用 `reset_each_update: False`，让全局规划器能看到已观测区域的实时更新；如果全局动态障碍残留影响规划，应增加衰减机制或把全局 layer 改为只处理硬障碍。
+局部使用 `reset_each_update: True`，避免动态障碍残留。全局使用 `reset_each_update: False`，让全局规划器能看到已观测区域的实时更新，同时通过衰减机制逐步清除旧观测，减轻动态障碍残留对全局规划的影响。
 
 ## nav2_custom_controller
 
