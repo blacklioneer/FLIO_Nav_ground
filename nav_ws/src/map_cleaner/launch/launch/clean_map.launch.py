@@ -10,7 +10,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 # 原始 PCD 路径
-                'input_pcd': '/home/blacklily/saved_maps/fused_clean.pcd',
+                'input_pcd': '/home/blacklily/saved_maps/1.pcd',
                 # 清洗后保存路径
                 'output_pcd': '/home/blacklily/saved_maps/1_cleaned.pcd',
                 
