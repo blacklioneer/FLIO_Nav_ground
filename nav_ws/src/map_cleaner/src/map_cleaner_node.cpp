@@ -4,7 +4,7 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 
-typedef pcl::PointXYZI PointType;
+typedef pcl::PointXYZRGB PointType;
 
 class MapCleanerNode : public rclcpp::Node
 {
@@ -25,7 +25,7 @@ public:
         int sor_mean_k = this->get_parameter("sor_mean_k").as_int();
         double sor_stddev = this->get_parameter("sor_stddev").as_double();
 
-        RCLCPP_INFO(this->get_logger(), "开始清洗地图（保留完整3D结构）...");
+        RCLCPP_INFO(this->get_logger(), "开始清洗地图（保留完整3D结构和RGB颜色）...");
         RCLCPP_INFO(this->get_logger(), "输入文件: %s", input_file.c_str());
         RCLCPP_INFO(this->get_logger(), "输出文件: %s", output_file.c_str());
 
