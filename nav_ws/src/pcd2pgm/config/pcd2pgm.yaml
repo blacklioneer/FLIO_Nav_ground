@@ -1,7 +1,7 @@
 pcd2pgm:
   ros__parameters:
     # 输入点云文件路径，支持 .pcd 和 .ply；只改变这里即可切换待转换点云。
-    input_file: "/home/blacklily/Documents/fused_1.pcd"
+    input_file: "/home/blacklily/saved_maps/cleaned.pcd"
 
     # 点云外参修正 [x, y, z, roll, pitch, yaw]，单位分别为 m/rad。
     #把输入 PCD 从雷达/里程计相关坐标系修正到 map 栅格生成所需要的坐标姿态。
@@ -19,7 +19,7 @@ pcd2pgm:
     # percentile: 直接按 ground_percentile 取低分位数。
     # densest: 先按 Z 聚类，选点数最多的一层。
     # upper_densest: 先按 Z 聚类，在靠近最低层的候选中选较高且点数足够的一层；适合多段拼接产生下方重影层的点云。
-    ground_estimation_method: percentile
+    ground_estimation_method: upper_densest
 
     # percentile 模式使用；每个栅格内取该分位数的 Z 值当地面。
     ground_percentile: 0.20
@@ -49,19 +49,35 @@ pcd2pgm:
     obstacle_min_height: 0.06
 
     # 障碍候选中超过 max_step_height 的比例阈值；比例和高度同时满足时标记占用。
-    obstacle_ratio_threshold: 0.15
+    obstacle_ratio_threshold: 0.18
 
-    # 坡度阈值，单位 deg；超过 max_slope_traversable 直接标记占用。
-    max_slope_traversable: 38.0
+    # 坡度阈值，单位 deg；连续坡面超过 max_slope_traversable 会标记占用。
+    max_slope_traversable: 30.0
 
     # 坡度超过该值后开始产生灰度代价，单位 deg。
     slope_cost_start: 20.0
 
-    # 高差/障碍高度超过该值后开始产生灰度代价，单位 m。
-    height_cost_start: 0.05
+    # 高差/障碍高度超过该值后开始产生灰度代价，单位 m；不要设到 max_step_height，否则低矮台阶不会产生渐进代价。
+    height_cost_start: 0.06
 
-    # 非致命代价上限；OccupancyGrid/PGM 使用 0~100，100 表示占用。
-    step_cost_max: 95
+    # 是否启用坡面补偿台阶检测；true 时先拟合局部坡面，再用相对坡面的残差高度判断台阶/障碍。
+    slope_compensation_enabled: true
+
+    # 局部坡面拟合半径，单位为栅格；2 表示在 5x5 邻域内拟合坡面。
+    slope_fit_radius: 2
+
+    # 拟合局部坡面需要的最少有效邻居数；邻居不足时自动回退到原始 8 邻域差分。
+    min_slope_fit_neighbors: 5
+
+    # 是否允许低矮台阶绕过坡度致命判定。
+    # 台阶边缘在栅格图上会形成很大的局部坡度；true 时只要高度差不超过 low_step_slope_bypass_height，就按可通行高代价处理。
+    allow_low_step_slope_bypass: true
+
+    # 低矮台阶坡度绕过高度，单位 m；0 表示自动使用 max_step_height。
+    low_step_slope_bypass_height: 0.0
+
+    # 非致命可通行代价上限；建议小于 map_saver 默认 occupied 阈值 65，避免低矮台阶保存成黑色占用。
+    step_cost_max: 60
 
     # 高差和坡度代价缩放，通常保持 1.0；增大后 PGM 中灰度障碍更保守。
     height_cost_scale: 1.0

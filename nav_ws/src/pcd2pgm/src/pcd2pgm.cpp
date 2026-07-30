@@ -144,7 +144,7 @@ void Pcd2PgmNode::declareParameters()
   declare_parameter("ground_layer_count_ratio", 0.60);
   declare_parameter("obstacle_percentile", 0.95);
   declare_parameter("flat_step_threshold", 0.02);
-  declare_parameter("step_cost_max", 95);
+  declare_parameter("step_cost_max", 60);
   declare_parameter("min_points_per_cell", 3);
   declare_parameter("obstacle_min_height", 0.05);
   declare_parameter("obstacle_ratio_threshold", 0.45);
@@ -153,6 +153,11 @@ void Pcd2PgmNode::declareParameters()
   declare_parameter("height_cost_start", 0.03);
   declare_parameter("slope_cost_scale", 1.0);
   declare_parameter("height_cost_scale", 1.0);
+  declare_parameter("slope_compensation_enabled", true);
+  declare_parameter("slope_fit_radius", 2);
+  declare_parameter("min_slope_fit_neighbors", 5);
+  declare_parameter("allow_low_step_slope_bypass", true);
+  declare_parameter("low_step_slope_bypass_height", 0.0);
   declare_parameter("interp_search_radius", 3);
   declare_parameter("min_interp_neighbors", 2);
   declare_parameter("obstacle_inflation_radius", 1);
@@ -192,6 +197,11 @@ void Pcd2PgmNode::getParameters()
   get_parameter("height_cost_start", height_cost_start_);
   get_parameter("slope_cost_scale", slope_cost_scale_);
   get_parameter("height_cost_scale", height_cost_scale_);
+  get_parameter("slope_compensation_enabled", slope_compensation_enabled_);
+  get_parameter("slope_fit_radius", slope_fit_radius_);
+  get_parameter("min_slope_fit_neighbors", min_slope_fit_neighbors_);
+  get_parameter("allow_low_step_slope_bypass", allow_low_step_slope_bypass_);
+  get_parameter("low_step_slope_bypass_height", low_step_slope_bypass_height_);
   get_parameter("interp_search_radius", interp_search_radius_);
   get_parameter("min_interp_neighbors", min_interp_neighbors_);
   get_parameter("obstacle_inflation_radius", obstacle_inflation_radius_);
@@ -202,10 +212,16 @@ void Pcd2PgmNode::getParameters()
   get_parameter("odom_to_lidar_odom", odom_to_lidar_odom_);
 
   step_cost_max_ = clampOccupancy(step_cost_max_);
+  step_cost_max_ = std::min(step_cost_max_, 64);
   min_points_per_cell_ = std::max(1, min_points_per_cell_);
   ground_cluster_tolerance_ = std::max(0.01f, ground_cluster_tolerance_);
   ground_layer_max_gap_ = std::max(0.0f, ground_layer_max_gap_);
   ground_layer_count_ratio_ = std::max(0.0f, std::min(ground_layer_count_ratio_, 1.0f));
+  if (low_step_slope_bypass_height_ <= 0.0f) {
+    low_step_slope_bypass_height_ = max_step_height_;
+  }
+  slope_fit_radius_ = std::max(1, slope_fit_radius_);
+  min_slope_fit_neighbors_ = std::max(3, min_slope_fit_neighbors_);
   interp_search_radius_ = std::max(0, interp_search_radius_);
   min_interp_neighbors_ = std::max(1, min_interp_neighbors_);
   obstacle_inflation_radius_ = std::max(0, obstacle_inflation_radius_);
@@ -362,10 +378,6 @@ int Pcd2PgmNode::computeTerrainOccupancy(
   constexpr float kPi = 3.14159265358979323846f;
   const float slope_angle_deg = std::atan(slope) * 180.0f / kPi;
 
-  if (slope_angle_deg > max_slope_traversable_) {
-    return 100;
-  }
-
   if (height_diff > max_step_height_) {
     return 100;
   }
@@ -374,6 +386,13 @@ int Pcd2PgmNode::computeTerrainOccupancy(
     obstacle_height > max_step_height_ &&
     obstacle_ratio >= obstacle_ratio_threshold_)
   {
+    return 100;
+  }
+
+  const bool low_step_bypasses_slope =
+    allow_low_step_slope_bypass_ && height_diff > flat_step_threshold_ &&
+    height_diff <= low_step_slope_bypass_height_;
+  if (slope_angle_deg > max_slope_traversable_ && !low_step_bypasses_slope) {
     return 100;
   }
 
@@ -398,7 +417,7 @@ int Pcd2PgmNode::computeTerrainOccupancy(
     cost = std::max(cost, static_cast<int>(std::round(ratio * step_cost_max_ * slope_cost_scale_)));
   }
 
-  return clampOccupancy(std::min(cost, 99));
+  return clampOccupancy(std::min(cost, step_cost_max_));
 }
 
 void Pcd2PgmNode::radiusOutlierFilter(
@@ -598,67 +617,139 @@ void Pcd2PgmNode::setTerrainMapTopicMsg(
         continue;
       }
 
-      float z_xp = cell.ground_z;
-      float z_xm = cell.ground_z;
-      float z_yp = cell.ground_z;
-      float z_ym = cell.ground_z;
-      bool has_xp = false;
-      bool has_xm = false;
-      bool has_yp = false;
-      bool has_ym = false;
-      float max_diff = 0.0f;
+      float slope_x = 0.0f;
+      float slope_y = 0.0f;
+      float residual_height_diff = 0.0f;
+      int slope_neighbors = 0;
 
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-          if (dx == 0 && dy == 0) {
-            continue;
-          }
-          const int nx = i + dx;
-          const int ny = j + dy;
-          if (!isInside(nx, ny, width, height)) {
-            continue;
-          }
-          const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
-          if (!neighbor.valid) {
-            continue;
-          }
-          max_diff = std::max(max_diff, std::abs(neighbor.ground_z - cell.ground_z));
+      if (slope_compensation_enabled_) {
+        float sxx = 0.0f;
+        float syy = 0.0f;
+        float sxy = 0.0f;
+        float sxz = 0.0f;
+        float syz = 0.0f;
 
-          if (dx == 1 && dy == 0) {
-            z_xp = neighbor.ground_z;
-            has_xp = true;
-          } else if (dx == -1 && dy == 0) {
-            z_xm = neighbor.ground_z;
-            has_xm = true;
-          } else if (dx == 0 && dy == 1) {
-            z_yp = neighbor.ground_z;
-            has_yp = true;
-          } else if (dx == 0 && dy == -1) {
-            z_ym = neighbor.ground_z;
-            has_ym = true;
+        for (int dy = -slope_fit_radius_; dy <= slope_fit_radius_; ++dy) {
+          for (int dx = -slope_fit_radius_; dx <= slope_fit_radius_; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int nx = i + dx;
+            const int ny = j + dy;
+            if (!isInside(nx, ny, width, height)) {
+              continue;
+            }
+            const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
+            if (!neighbor.valid) {
+              continue;
+            }
+
+            const float x = static_cast<float>(dx) * map_resolution_;
+            const float y = static_cast<float>(dy) * map_resolution_;
+            const float dz = neighbor.ground_z - cell.ground_z;
+            const float weight = 1.0f / std::max(1.0f, static_cast<float>(dx * dx + dy * dy));
+            sxx += weight * x * x;
+            syy += weight * y * y;
+            sxy += weight * x * y;
+            sxz += weight * x * dz;
+            syz += weight * y * dz;
+            ++slope_neighbors;
           }
+        }
+
+        const float det = sxx * syy - sxy * sxy;
+        if (slope_neighbors >= min_slope_fit_neighbors_ && std::abs(det) > 1e-6f) {
+          slope_x = (sxz * syy - syz * sxy) / det;
+          slope_y = (syz * sxx - sxz * sxy) / det;
+
+          for (int dy = -slope_fit_radius_; dy <= slope_fit_radius_; ++dy) {
+            for (int dx = -slope_fit_radius_; dx <= slope_fit_radius_; ++dx) {
+              if (dx == 0 && dy == 0) {
+                continue;
+              }
+              const int nx = i + dx;
+              const int ny = j + dy;
+              if (!isInside(nx, ny, width, height)) {
+                continue;
+              }
+              const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
+              if (!neighbor.valid) {
+                continue;
+              }
+
+              const float x = static_cast<float>(dx) * map_resolution_;
+              const float y = static_cast<float>(dy) * map_resolution_;
+              const float expected_z = cell.ground_z + slope_x * x + slope_y * y;
+              residual_height_diff =
+                std::max(residual_height_diff, std::abs(neighbor.ground_z - expected_z));
+            }
+          }
+        } else {
+          slope_neighbors = 0;
         }
       }
 
-      float slope_x = 0.0f;
-      float slope_y = 0.0f;
-      if (has_xp && has_xm) {
-        slope_x = (z_xp - z_xm) / (2.0f * map_resolution_);
-      } else if (has_xp) {
-        slope_x = (z_xp - cell.ground_z) / map_resolution_;
-      } else if (has_xm) {
-        slope_x = (cell.ground_z - z_xm) / map_resolution_;
+      if (!slope_compensation_enabled_ || slope_neighbors < min_slope_fit_neighbors_) {
+        float z_xp = cell.ground_z;
+        float z_xm = cell.ground_z;
+        float z_yp = cell.ground_z;
+        float z_ym = cell.ground_z;
+        bool has_xp = false;
+        bool has_xm = false;
+        bool has_yp = false;
+        bool has_ym = false;
+
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int nx = i + dx;
+            const int ny = j + dy;
+            if (!isInside(nx, ny, width, height)) {
+              continue;
+            }
+            const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
+            if (!neighbor.valid) {
+              continue;
+            }
+            residual_height_diff =
+              std::max(residual_height_diff, std::abs(neighbor.ground_z - cell.ground_z));
+
+            if (dx == 1 && dy == 0) {
+              z_xp = neighbor.ground_z;
+              has_xp = true;
+            } else if (dx == -1 && dy == 0) {
+              z_xm = neighbor.ground_z;
+              has_xm = true;
+            } else if (dx == 0 && dy == 1) {
+              z_yp = neighbor.ground_z;
+              has_yp = true;
+            } else if (dx == 0 && dy == -1) {
+              z_ym = neighbor.ground_z;
+              has_ym = true;
+            }
+          }
+        }
+
+        if (has_xp && has_xm) {
+          slope_x = (z_xp - z_xm) / (2.0f * map_resolution_);
+        } else if (has_xp) {
+          slope_x = (z_xp - cell.ground_z) / map_resolution_;
+        } else if (has_xm) {
+          slope_x = (cell.ground_z - z_xm) / map_resolution_;
+        }
+
+        if (has_yp && has_ym) {
+          slope_y = (z_yp - z_ym) / (2.0f * map_resolution_);
+        } else if (has_yp) {
+          slope_y = (z_yp - cell.ground_z) / map_resolution_;
+        } else if (has_ym) {
+          slope_y = (cell.ground_z - z_ym) / map_resolution_;
+        }
       }
 
-      if (has_yp && has_ym) {
-        slope_y = (z_yp - z_ym) / (2.0f * map_resolution_);
-      } else if (has_yp) {
-        slope_y = (z_yp - cell.ground_z) / map_resolution_;
-      } else if (has_ym) {
-        slope_y = (cell.ground_z - z_ym) / map_resolution_;
-      }
-
-      cell.height_diff = max_diff;
+      cell.height_diff = residual_height_diff;
       cell.slope_magnitude = std::sqrt(slope_x * slope_x + slope_y * slope_y);
     }
   }

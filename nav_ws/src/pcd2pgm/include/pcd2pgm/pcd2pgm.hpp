@@ -91,6 +91,11 @@ private:
   float height_cost_start_;
   float slope_cost_scale_;
   float height_cost_scale_;
+  bool slope_compensation_enabled_;
+  int slope_fit_radius_;
+  int min_slope_fit_neighbors_;
+  bool allow_low_step_slope_bypass_;
+  float low_step_slope_bypass_height_;
   int interp_search_radius_;
   int min_interp_neighbors_;
   int obstacle_inflation_radius_;

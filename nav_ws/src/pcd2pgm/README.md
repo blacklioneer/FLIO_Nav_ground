@@ -17,7 +17,7 @@
 1. 在 `analysis_z_min` 到 `analysis_z_max` 范围内读取点云。
 2. 每个栅格用 `ground_percentile` 估计地面高度，减少噪点影响。
 3. 在地面上方 `robot_body_height` 范围内统计障碍候选比例，避免把高处天花板直接当作地面障碍。
-4. 用邻域地面高度计算坡度和最大高度差。
+4. 用邻域地面高度拟合局部坡面，先得到整体坡度，再用相对坡面的残差高度差判断台阶/障碍。
 5. 对小面积无观测栅格做反距离插值补全。
 6. 按 OccupancyGrid 标准输出 `-1/0..100`：`-1` unknown，`0` free，`100` occupied，中间值为灰度代价。
 7. 对占用栅格执行 `obstacle_inflation_radius` 离线膨胀，保存 PGM 的方式不变。
@@ -99,6 +99,12 @@ ros2 run nav2_map_server map_saver_cli -f ~/maps/test_map --ros-args -r map:=/te
 | `robot_body_height` | 地面上方障碍检测高度范围 |
 | `obstacle_ratio_threshold` | 障碍密度阈值 |
 | `max_slope_traversable` | 最大可通行坡度，单位 deg |
+| `slope_compensation_enabled` | 是否启用局部坡面补偿台阶检测 |
+| `slope_fit_radius` | 局部坡面拟合半径，单位栅格 |
+| `min_slope_fit_neighbors` | 局部坡面拟合所需最少有效邻居 |
+| `allow_low_step_slope_bypass` | 低矮台阶是否绕过坡度致命判定 |
+| `low_step_slope_bypass_height` | 低矮台阶坡度绕过高度，`0` 表示使用 `max_step_height` |
+| `step_cost_max` | 非致命可通行代价上限，建议小于 `65` |
 | `interp_search_radius` | 小洞插值半径，单位栅格 |
 | `obstacle_inflation_radius` | 离线障碍膨胀半径，单位栅格 |
 | `map_resolution` | 输出地图分辨率 |
@@ -111,3 +117,35 @@ ros2 run nav2_map_server map_saver_cli -f ~/maps/test_map --ros-args -r map:=/te
 - 台阶/坡道被误判为可通行时，减小 `max_step_height` 或 `max_slope_traversable`。
 - 小洞过多时，增大 `interp_search_radius`；若插值导致未知区域过多变为可通行，减小该值或增大 `min_interp_neighbors`。
 - 多段拼接点云在地面下方出现重影层时，使用 `ground_estimation_method: upper_densest`，并把 `ground_cluster_tolerance` 设得略小于两层重影的 Z 间距。
+
+## 低矮台阶误判排查
+
+低矮台阶显示成不可达边界通常有两个原因：
+
+1. 台阶边缘的局部坡度过大。栅格分辨率为 `0.10m` 时，`0.10m` 高台阶在相邻栅格上的坡度约为 `45deg`，可能超过 `max_slope_traversable`。
+2. 保存 PGM 时，`map_saver_cli` 默认会把高占用概率栅格保存为黑色占用。非致命代价如果设置到 `95`，看起来也会像不可通行障碍。
+3. 台阶本身在斜坡上时，原始相邻高度差包含了坡面的连续抬升，需要启用坡面补偿。
+
+推荐配置：
+
+```yaml
+max_step_height: 0.24
+slope_compensation_enabled: true
+slope_fit_radius: 2
+min_slope_fit_neighbors: 5
+allow_low_step_slope_bypass: true
+low_step_slope_bypass_height: 0.0
+step_cost_max: 60
+```
+
+这表示：先在局部邻域拟合坡面，连续斜坡的高度变化会被扣除；再用相对坡面的残差高度判断台阶。高度不超过 `max_step_height` 的低矮台阶不会因为局部坡度过大直接变成 `100` 占用，而是输出不超过 `step_cost_max` 的可通行高代价。`step_cost_max` 建议小于 `65`，避免保存 PGM 时被默认 occupied 阈值当成黑色障碍。
+
+如果斜坡上台阶仍被误判为边界，优先调整：
+
+```yaml
+slope_fit_radius: 3
+min_slope_fit_neighbors: 8
+height_cost_start: 0.05
+```
+
+`slope_fit_radius` 越大，越能估计整体坡面，但太大会抹平真实台阶；一般在 `2~3` 之间调。
