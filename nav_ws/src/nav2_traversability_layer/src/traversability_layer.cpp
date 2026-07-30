@@ -50,13 +50,24 @@ void TraversabilityLayer::declareParameters()
   declareParameter("analysis_z_max", rclcpp::ParameterValue(2.0));
   declareParameter("min_points_per_cell", rclcpp::ParameterValue(4));
   declareParameter("ground_percentile", rclcpp::ParameterValue(0.2));
+  declareParameter("ground_estimation_method", rclcpp::ParameterValue(std::string("upper_densest")));
+  declareParameter("ground_cluster_tolerance", rclcpp::ParameterValue(0.05));
+  declareParameter("ground_cluster_percentile", rclcpp::ParameterValue(0.50));
+  declareParameter("ground_layer_max_gap", rclcpp::ParameterValue(0.30));
+  declareParameter("ground_layer_count_ratio", rclcpp::ParameterValue(0.55));
   declareParameter("max_step_height", rclcpp::ParameterValue(0.24));
   declareParameter("robot_body_height", rclcpp::ParameterValue(1.2));
   declareParameter("obstacle_min_height", rclcpp::ParameterValue(0.06));
-  declareParameter("obstacle_ratio_threshold", rclcpp::ParameterValue(0.15));
-  declareParameter("max_slope_traversable", rclcpp::ParameterValue(38.0));
+  declareParameter("obstacle_ratio_threshold", rclcpp::ParameterValue(0.18));
+  declareParameter("max_slope_traversable", rclcpp::ParameterValue(30.0));
   declareParameter("slope_cost_start", rclcpp::ParameterValue(20.0));
   declareParameter("height_cost_start", rclcpp::ParameterValue(0.05));
+  declareParameter("slope_compensation_enabled", rclcpp::ParameterValue(true));
+  declareParameter("slope_fit_radius", rclcpp::ParameterValue(2));
+  declareParameter("min_slope_fit_neighbors", rclcpp::ParameterValue(5));
+  declareParameter("allow_low_step_slope_bypass", rclcpp::ParameterValue(true));
+  declareParameter("low_step_slope_bypass_height", rclcpp::ParameterValue(0.0));
+  declareParameter("flat_step_threshold", rclcpp::ParameterValue(0.02));
   declareParameter("hard_obstacle_height", rclcpp::ParameterValue(0.35));
   declareParameter("hard_obstacle_ratio_threshold", rclcpp::ParameterValue(0.30));
   declareParameter("hard_slope_limit", rclcpp::ParameterValue(50.0));
@@ -87,6 +98,11 @@ void TraversabilityLayer::readParameters()
   node->get_parameter(name_ + ".analysis_z_max", analysis_z_max_);
   node->get_parameter(name_ + ".min_points_per_cell", min_points_per_cell_);
   node->get_parameter(name_ + ".ground_percentile", ground_percentile_);
+  node->get_parameter(name_ + ".ground_estimation_method", ground_estimation_method_);
+  node->get_parameter(name_ + ".ground_cluster_tolerance", ground_cluster_tolerance_);
+  node->get_parameter(name_ + ".ground_cluster_percentile", ground_cluster_percentile_);
+  node->get_parameter(name_ + ".ground_layer_max_gap", ground_layer_max_gap_);
+  node->get_parameter(name_ + ".ground_layer_count_ratio", ground_layer_count_ratio_);
   node->get_parameter(name_ + ".max_step_height", max_step_height_);
   node->get_parameter(name_ + ".robot_body_height", robot_body_height_);
   node->get_parameter(name_ + ".obstacle_min_height", obstacle_min_height_);
@@ -94,6 +110,12 @@ void TraversabilityLayer::readParameters()
   node->get_parameter(name_ + ".max_slope_traversable", max_slope_traversable_deg_);
   node->get_parameter(name_ + ".slope_cost_start", slope_cost_start_deg_);
   node->get_parameter(name_ + ".height_cost_start", height_cost_start_);
+  node->get_parameter(name_ + ".slope_compensation_enabled", slope_compensation_enabled_);
+  node->get_parameter(name_ + ".slope_fit_radius", slope_fit_radius_);
+  node->get_parameter(name_ + ".min_slope_fit_neighbors", min_slope_fit_neighbors_);
+  node->get_parameter(name_ + ".allow_low_step_slope_bypass", allow_low_step_slope_bypass_);
+  node->get_parameter(name_ + ".low_step_slope_bypass_height", low_step_slope_bypass_height_);
+  node->get_parameter(name_ + ".flat_step_threshold", flat_step_threshold_);
   node->get_parameter(name_ + ".hard_obstacle_height", hard_obstacle_height_);
   node->get_parameter(name_ + ".hard_obstacle_ratio_threshold", hard_obstacle_ratio_threshold_);
   node->get_parameter(name_ + ".hard_slope_limit", hard_slope_limit_deg_);
@@ -110,6 +132,15 @@ void TraversabilityLayer::readParameters()
     target_frame_ = layered_costmap_->getGlobalFrameID();
   }
   ground_percentile_ = clamp01(ground_percentile_);
+  ground_cluster_percentile_ = clamp01(ground_cluster_percentile_);
+  ground_cluster_tolerance_ = std::max(0.01, ground_cluster_tolerance_);
+  ground_layer_max_gap_ = std::max(0.0, ground_layer_max_gap_);
+  ground_layer_count_ratio_ = clamp01(ground_layer_count_ratio_);
+  if (low_step_slope_bypass_height_ <= 0.0) {
+    low_step_slope_bypass_height_ = max_step_height_;
+  }
+  slope_fit_radius_ = std::max(1, slope_fit_radius_);
+  min_slope_fit_neighbors_ = std::max(3, min_slope_fit_neighbors_);
   soft_cost_max_ = std::max(1, std::min(252, soft_cost_max_));
   decay_rate_per_second_ = std::max(0.0, decay_rate_per_second_);
   decay_minimum_cost_ = std::max(1, std::min(soft_cost_max_, decay_minimum_cost_));
@@ -187,16 +218,80 @@ void TraversabilityLayer::pointCloudCallback(sensor_msgs::msg::PointCloud2::Cons
   current_ = false;
 }
 
-// Estimate a representative ground height using the configured percentile.
+// Estimate a representative ground height using percentile or z-layer clustering.
 double TraversabilityLayer::estimateGroundZ(std::vector<double> & z_values) const
 {
   if (z_values.empty()) {
     return 0.0;
   }
+
+  if (ground_estimation_method_ == "percentile") {
+    const size_t idx = static_cast<size_t>(
+      std::floor(ground_percentile_ * static_cast<double>(z_values.size() - 1)));
+    std::nth_element(z_values.begin(), z_values.begin() + idx, z_values.end());
+    return z_values[idx];
+  }
+
+  std::sort(z_values.begin(), z_values.end());
+  std::vector<ZCluster> clusters;
+  ZCluster current;
+  current.begin = 0;
+  current.min_z = z_values.front();
+
+  for (size_t i = 1; i < z_values.size(); ++i) {
+    if (z_values[i] - z_values[i - 1] > ground_cluster_tolerance_) {
+      current.end = i;
+      current.max_z = z_values[i - 1];
+      current.count = current.end - current.begin;
+      current.center_z = 0.5 * (current.min_z + current.max_z);
+      clusters.push_back(current);
+
+      current = ZCluster{};
+      current.begin = i;
+      current.min_z = z_values[i];
+    }
+  }
+
+  current.end = z_values.size();
+  current.max_z = z_values.back();
+  current.count = current.end - current.begin;
+  current.center_z = 0.5 * (current.min_z + current.max_z);
+  clusters.push_back(current);
+
+  std::vector<ZCluster>::const_iterator best_it = clusters.begin();
+  if (ground_estimation_method_ == "densest") {
+    best_it = std::max_element(
+      clusters.begin(), clusters.end(),
+      [](const ZCluster & lhs, const ZCluster & rhs) {
+        return lhs.count < rhs.count;
+      });
+  } else if (ground_estimation_method_ == "upper_densest") {
+    const size_t max_count = std::max_element(
+      clusters.begin(), clusters.end(),
+      [](const ZCluster & lhs, const ZCluster & rhs) {
+        return lhs.count < rhs.count;
+      })->count;
+    const double lowest_center = clusters.front().center_z;
+    const size_t min_count = static_cast<size_t>(
+      std::ceil(static_cast<double>(max_count) * ground_layer_count_ratio_));
+
+    best_it = clusters.begin();
+    for (std::vector<ZCluster>::const_iterator it = clusters.begin(); it != clusters.end(); ++it) {
+      const bool close_to_low_layer = (it->center_z - lowest_center) <= ground_layer_max_gap_;
+      if (it->count >= min_count && close_to_low_layer && it->center_z >= best_it->center_z) {
+        best_it = it;
+      }
+    }
+  } else {
+    const size_t idx = static_cast<size_t>(
+      std::floor(ground_percentile_ * static_cast<double>(z_values.size() - 1)));
+    return z_values[idx];
+  }
+
+  const size_t cluster_size = best_it->end - best_it->begin;
   const size_t idx = static_cast<size_t>(
-    std::floor(ground_percentile_ * static_cast<double>(z_values.size() - 1)));
-  std::nth_element(z_values.begin(), z_values.begin() + idx, z_values.end());
-  return z_values[idx];
+    std::floor(ground_cluster_percentile_ * static_cast<double>(cluster_size - 1)));
+  return z_values[best_it->begin + idx];
 }
 
 // Map terrain statistics to either free/soft/lethal cost semantics.
@@ -221,7 +316,14 @@ unsigned char TraversabilityLayer::computeCost(const CellStats & cell) const
     return nav2_costmap_2d::LETHAL_OBSTACLE;
   }
 
-  if (cell.height_diff > max_step_height_ || slope_deg > max_slope_traversable_deg_) {
+  if (cell.height_diff > max_step_height_) {
+    return nav2_costmap_2d::LETHAL_OBSTACLE;
+  }
+
+  const bool low_step_bypasses_slope =
+    allow_low_step_slope_bypass_ && cell.height_diff > flat_step_threshold_ &&
+    cell.height_diff <= low_step_slope_bypass_height_;
+  if (slope_deg > max_slope_traversable_deg_ && !low_step_bypasses_slope) {
     return nav2_costmap_2d::LETHAL_OBSTACLE;
   }
 
@@ -489,66 +591,138 @@ bool TraversabilityLayer::processLatestCloud(
         continue;
       }
 
-      double z_xp = cell.ground_z;
-      double z_xm = cell.ground_z;
-      double z_yp = cell.ground_z;
-      double z_ym = cell.ground_z;
-      bool has_xp = false;
-      bool has_xm = false;
-      bool has_yp = false;
-      bool has_ym = false;
-      double max_diff = 0.0;
+      double slope_x = 0.0;
+      double slope_y = 0.0;
+      double residual_height_diff = 0.0;
+      int slope_neighbors = 0;
 
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-          if (dx == 0 && dy == 0) {
-            continue;
+      if (slope_compensation_enabled_) {
+        double sxx = 0.0;
+        double syy = 0.0;
+        double sxy = 0.0;
+        double sxz = 0.0;
+        double syz = 0.0;
+
+        for (int dy = -slope_fit_radius_; dy <= slope_fit_radius_; ++dy) {
+          for (int dx = -slope_fit_radius_; dx <= slope_fit_radius_; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+              continue;
+            }
+            const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
+            if (!neighbor.valid) {
+              continue;
+            }
+
+            const double local_x = static_cast<double>(dx) * resolution;
+            const double local_y = static_cast<double>(dy) * resolution;
+            const double dz = neighbor.ground_z - cell.ground_z;
+            const double weight = 1.0 / std::max(1.0, static_cast<double>(dx * dx + dy * dy));
+            sxx += weight * local_x * local_x;
+            syy += weight * local_y * local_y;
+            sxy += weight * local_x * local_y;
+            sxz += weight * local_x * dz;
+            syz += weight * local_y * dz;
+            ++slope_neighbors;
           }
-          const int nx = x + dx;
-          const int ny = y + dy;
-          if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
-            continue;
+        }
+
+        const double det = sxx * syy - sxy * sxy;
+        if (slope_neighbors >= min_slope_fit_neighbors_ && std::abs(det) > 1e-9) {
+          slope_x = (sxz * syy - syz * sxy) / det;
+          slope_y = (syz * sxx - sxz * sxy) / det;
+
+          for (int dy = -slope_fit_radius_; dy <= slope_fit_radius_; ++dy) {
+            for (int dx = -slope_fit_radius_; dx <= slope_fit_radius_; ++dx) {
+              if (dx == 0 && dy == 0) {
+                continue;
+              }
+              const int nx = x + dx;
+              const int ny = y + dy;
+              if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+                continue;
+              }
+              const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
+              if (!neighbor.valid) {
+                continue;
+              }
+
+              const double local_x = static_cast<double>(dx) * resolution;
+              const double local_y = static_cast<double>(dy) * resolution;
+              const double expected_z = cell.ground_z + slope_x * local_x + slope_y * local_y;
+              residual_height_diff =
+                std::max(residual_height_diff, std::abs(neighbor.ground_z - expected_z));
+            }
           }
-          const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
-          if (!neighbor.valid) {
-            continue;
-          }
-          max_diff = std::max(max_diff, std::abs(neighbor.ground_z - cell.ground_z));
-          if (dx == 1 && dy == 0) {
-            z_xp = neighbor.ground_z;
-            has_xp = true;
-          } else if (dx == -1 && dy == 0) {
-            z_xm = neighbor.ground_z;
-            has_xm = true;
-          } else if (dx == 0 && dy == 1) {
-            z_yp = neighbor.ground_z;
-            has_yp = true;
-          } else if (dx == 0 && dy == -1) {
-            z_ym = neighbor.ground_z;
-            has_ym = true;
-          }
+        } else {
+          slope_neighbors = 0;
         }
       }
 
-      double slope_x = 0.0;
-      double slope_y = 0.0;
-      if (has_xp && has_xm) {
-        slope_x = (z_xp - z_xm) / (2.0 * resolution);
-      } else if (has_xp) {
-        slope_x = (z_xp - cell.ground_z) / resolution;
-      } else if (has_xm) {
-        slope_x = (cell.ground_z - z_xm) / resolution;
+      if (!slope_compensation_enabled_ || slope_neighbors < min_slope_fit_neighbors_) {
+        double z_xp = cell.ground_z;
+        double z_xm = cell.ground_z;
+        double z_yp = cell.ground_z;
+        double z_ym = cell.ground_z;
+        bool has_xp = false;
+        bool has_xm = false;
+        bool has_yp = false;
+        bool has_ym = false;
+
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+              continue;
+            }
+            const auto & neighbor = cells[static_cast<size_t>(index2d(nx, ny, width))];
+            if (!neighbor.valid) {
+              continue;
+            }
+            residual_height_diff =
+              std::max(residual_height_diff, std::abs(neighbor.ground_z - cell.ground_z));
+            if (dx == 1 && dy == 0) {
+              z_xp = neighbor.ground_z;
+              has_xp = true;
+            } else if (dx == -1 && dy == 0) {
+              z_xm = neighbor.ground_z;
+              has_xm = true;
+            } else if (dx == 0 && dy == 1) {
+              z_yp = neighbor.ground_z;
+              has_yp = true;
+            } else if (dx == 0 && dy == -1) {
+              z_ym = neighbor.ground_z;
+              has_ym = true;
+            }
+          }
+        }
+
+        if (has_xp && has_xm) {
+          slope_x = (z_xp - z_xm) / (2.0 * resolution);
+        } else if (has_xp) {
+          slope_x = (z_xp - cell.ground_z) / resolution;
+        } else if (has_xm) {
+          slope_x = (cell.ground_z - z_xm) / resolution;
+        }
+
+        if (has_yp && has_ym) {
+          slope_y = (z_yp - z_ym) / (2.0 * resolution);
+        } else if (has_yp) {
+          slope_y = (z_yp - cell.ground_z) / resolution;
+        } else if (has_ym) {
+          slope_y = (cell.ground_z - z_ym) / resolution;
+        }
       }
 
-      if (has_yp && has_ym) {
-        slope_y = (z_yp - z_ym) / (2.0 * resolution);
-      } else if (has_yp) {
-        slope_y = (z_yp - cell.ground_z) / resolution;
-      } else if (has_ym) {
-        slope_y = (cell.ground_z - z_ym) / resolution;
-      }
-
-      cell.height_diff = max_diff;
+      cell.height_diff = residual_height_diff;
       cell.slope = std::sqrt(slope_x * slope_x + slope_y * slope_y);
     }
   }

@@ -48,6 +48,16 @@ private:
     double slope{0.0};
   };
 
+  struct ZCluster
+  {
+    size_t begin{0};
+    size_t end{0};
+    double min_z{0.0};
+    double max_z{0.0};
+    double center_z{0.0};
+    size_t count{0};
+  };
+
   // Store the newest point cloud for the next costmap update cycle.
   void pointCloudCallback(sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
   // Convert the latest point cloud into traversability costs for this layer.
@@ -85,13 +95,24 @@ private:
   double analysis_z_max_{2.0};
   int min_points_per_cell_{4};
   double ground_percentile_{0.2};
+  std::string ground_estimation_method_{"upper_densest"};
+  double ground_cluster_tolerance_{0.05};
+  double ground_cluster_percentile_{0.50};
+  double ground_layer_max_gap_{0.30};
+  double ground_layer_count_ratio_{0.55};
   double max_step_height_{0.24};
   double robot_body_height_{1.2};
   double obstacle_min_height_{0.06};
-  double obstacle_ratio_threshold_{0.15};
-  double max_slope_traversable_deg_{38.0};
+  double obstacle_ratio_threshold_{0.18};
+  double max_slope_traversable_deg_{30.0};
   double slope_cost_start_deg_{20.0};
   double height_cost_start_{0.05};
+  bool slope_compensation_enabled_{true};
+  int slope_fit_radius_{2};
+  int min_slope_fit_neighbors_{5};
+  bool allow_low_step_slope_bypass_{true};
+  double low_step_slope_bypass_height_{0.0};
+  double flat_step_threshold_{0.02};
   double hard_obstacle_height_{0.35};
   double hard_obstacle_ratio_threshold_{0.30};
   double hard_slope_limit_deg_{50.0};

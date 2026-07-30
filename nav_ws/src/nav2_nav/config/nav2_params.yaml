@@ -201,14 +201,25 @@ local_costmap:
         analysis_z_min: -1.0             # 参与分析的最低 z，高于该范围外的点会被忽略
         analysis_z_max: 2.0              # 参与分析的最高 z
         min_points_per_cell: 4           # 每个栅格至少需要多少点才进行有效地形评估
+        ground_estimation_method: upper_densest # 地面估计方式；适合过滤拼接点云下方重影层
         ground_percentile: 0.20          # 地面估计使用 z 分布的 20% 分位点
+        ground_cluster_tolerance: 0.05   # Z 聚类间隔，单位 m
+        ground_cluster_percentile: 0.50  # 选中地面层内部取中位数
+        ground_layer_max_gap: 0.30       # upper_densest 只在最低层上方该范围内选地面
+        ground_layer_count_ratio: 0.55   # 候选地面层点数占最大层点数的最低比例
         max_step_height: 0.24            # 允许通过的最大台阶/高差，单位 m
         robot_body_height: 1.2           # 机器人身体上缘高度，用于障碍物评估范围
         obstacle_min_height: 0.06        # 高于地面该值以上的点开始视为障碍候选，单位 m
-        obstacle_ratio_threshold: 0.15   # 障碍点比例超过该阈值后更倾向判为不可通行
-        max_slope_traversable: 38.0      # 可通行最大坡度，单位 deg
+        obstacle_ratio_threshold: 0.18   # 障碍点比例超过该阈值后更倾向判为不可通行
+        max_slope_traversable: 30.0      # 可通行最大坡度，单位 deg
         slope_cost_start: 20.0           # 从该坡度开始逐渐增加软代价，单位 deg
         height_cost_start: 0.05          # 从该高差开始逐渐增加软代价，单位 m
+        slope_compensation_enabled: True # 先拟合局部坡面，再用坡面残差判断台阶/障碍
+        slope_fit_radius: 2              # 局部坡面拟合半径，单位栅格
+        min_slope_fit_neighbors: 5       # 拟合坡面需要的最少有效邻居数
+        allow_low_step_slope_bypass: True # 低矮台阶不因台阶边缘局部坡度直接判为 lethal
+        low_step_slope_bypass_height: 0.0 # 0 表示自动使用 max_step_height
+        flat_step_threshold: 0.02        # 低于该高度差视为平整区域
         hard_obstacle_height: 0.35       # 超过该障碍高度直接判为硬障碍，单位 m
         hard_obstacle_ratio_threshold: 0.30 # 障碍比例超过该值时更容易直接判为硬障碍
         hard_slope_limit: 50.0           # 超过该坡度直接判为硬障碍，单位 deg
@@ -243,14 +254,25 @@ global_costmap:
         analysis_z_min: -1.0             # 参与分析的最低 z
         analysis_z_max: 2.0              # 参与分析的最高 z
         min_points_per_cell: 4           # 每格最少点数
+        ground_estimation_method: upper_densest # 地面估计方式；适合过滤拼接点云下方重影层
         ground_percentile: 0.20          # 地面估计分位点
+        ground_cluster_tolerance: 0.05   # Z 聚类间隔，单位 m
+        ground_cluster_percentile: 0.50  # 选中地面层内部取中位数
+        ground_layer_max_gap: 0.30       # upper_densest 只在最低层上方该范围内选地面
+        ground_layer_count_ratio: 0.55   # 候选地面层点数占最大层点数的最低比例
         max_step_height: 0.24            # 允许通过的最大台阶/高差
         robot_body_height: 1.2           # 机器人身体高度评估范围
         obstacle_min_height: 0.06        # 障碍候选最小离地高度
-        obstacle_ratio_threshold: 0.15   # 障碍比例阈值
-        max_slope_traversable: 38.0      # 可通行最大坡度
+        obstacle_ratio_threshold: 0.18   # 障碍比例阈值
+        max_slope_traversable: 30.0      # 可通行最大坡度
         slope_cost_start: 20.0           # 开始叠加坡度软代价的阈值
         height_cost_start: 0.05          # 开始叠加高差软代价的阈值
+        slope_compensation_enabled: True # 先拟合局部坡面，再用坡面残差判断台阶/障碍
+        slope_fit_radius: 2              # 局部坡面拟合半径，单位栅格
+        min_slope_fit_neighbors: 5       # 拟合坡面需要的最少有效邻居数
+        allow_low_step_slope_bypass: True # 低矮台阶不因台阶边缘局部坡度直接判为 lethal
+        low_step_slope_bypass_height: 0.0 # 0 表示自动使用 max_step_height
+        flat_step_threshold: 0.02        # 低于该高度差视为平整区域
         hard_obstacle_height: 0.35       # 直接判为硬障碍的障碍高度
         hard_obstacle_ratio_threshold: 0.30 # 直接判为硬障碍的障碍比例阈值
         hard_slope_limit: 50.0           # 直接判为硬障碍的坡度阈值

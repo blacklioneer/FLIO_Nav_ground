@@ -364,8 +364,8 @@ pointcloud_topic: /cloud_registered_body_1
 - `ground_z`：栅格地面高度估计。
 - `obstacle_height`：地面上方障碍高度。
 - `obstacle_ratio`：超过可跨越高度的点占障碍候选点比例。
-- `height_diff`：邻域地面最大高度差。
-- `slope`：邻域坡度。
+- `height_diff`：扣除局部坡面后的残差高度差，用于区分斜坡上的连续抬升和真实台阶/障碍。
+- `slope`：局部坡面拟合得到的整体坡度。
 
 然后根据足式机器人能力输出代价：
 
@@ -379,7 +379,12 @@ pointcloud_topic: /cloud_registered_body_1
 | --- | --- | --- |
 | `pointcloud_topic` | `/cloud_registered_body_1` | 输入机体系 3D 点云 |
 | `max_step_height` | `0.24` | 可跨越台阶/高差阈值 |
-| `max_slope_traversable` | `38.0` | 可通行坡度阈值，单位 deg |
+| `max_slope_traversable` | `30.0` | 可通行坡度阈值，单位 deg |
+| `slope_compensation_enabled` | `True` | 先拟合局部坡面，再用坡面残差判断台阶/障碍 |
+| `slope_fit_radius` | `2` | 局部坡面拟合半径，单位栅格 |
+| `min_slope_fit_neighbors` | `5` | 拟合坡面需要的最少有效邻居数 |
+| `allow_low_step_slope_bypass` | `True` | 低矮台阶不因台阶边缘局部坡度直接判为硬障碍 |
+| `ground_estimation_method` | `upper_densest` | 地面估计方式，适合过滤拼接点云下方重影层 |
 | `robot_body_height` | `1.2` | 地面上方障碍检测高度范围 |
 | `obstacle_min_height` | `0.06` | 高于地面多少开始视为障碍候选 |
 | `hard_obstacle_height` | `0.35` | 超过后直接视为硬障碍 |
@@ -417,6 +422,26 @@ traversability_layer:
 ```
 
 局部使用 `reset_each_update: True`，避免动态障碍残留。全局使用 `reset_each_update: False`，让全局规划器能看到已观测区域的实时更新，同时通过衰减机制逐步清除旧观测，减轻动态障碍残留对全局规划的影响。
+
+### 斜坡台阶处理
+
+当前 `nav2_traversability_layer` 与离线 `pcd2pgm` 的判定逻辑保持一致：先在邻域内拟合局部坡面，再用点到该坡面的残差高度判断台阶/障碍。这样台阶如果本来就在斜坡上，连续坡面带来的高度变化不会被直接当成台阶边界。
+
+推荐配置：
+
+```yaml
+ground_estimation_method: upper_densest
+max_step_height: 0.24
+max_slope_traversable: 30.0
+slope_compensation_enabled: True
+slope_fit_radius: 2
+min_slope_fit_neighbors: 5
+allow_low_step_slope_bypass: True
+low_step_slope_bypass_height: 0.0
+height_cost_start: 0.05
+```
+
+如果斜坡上的低矮台阶仍被判得过硬，优先把 `slope_fit_radius` 调到 `3`、`min_slope_fit_neighbors` 调到 `8`。如果真实台阶被抹平，则退回 `slope_fit_radius: 2`。
 
 ## 局部控制器（当前默认：Nav2 MPPI）
 
