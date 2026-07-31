@@ -10,6 +10,7 @@
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "tf2/LinearMath/Transform.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2_ros/create_timer_ros.h"
 #include "tf2_ros/transform_listener.h"
@@ -45,6 +46,12 @@ void TraversabilityLayer::declareParameters()
   declareParameter("pointcloud_topic", rclcpp::ParameterValue(std::string("/cloud_registered_body_1")));
   declareParameter("target_frame", rclcpp::ParameterValue(std::string("")));
   declareParameter("transform_tolerance", rclcpp::ParameterValue(0.05));
+  declareParameter("processing_frequency", rclcpp::ParameterValue(2.0));
+  declareParameter("point_subsample_step", rclcpp::ParameterValue(4));
+  declareParameter("max_points_per_update", rclcpp::ParameterValue(12000));
+  declareParameter("max_raw_points_per_update", rclcpp::ParameterValue(60000));
+  declareParameter("source_frame_filter_margin", rclcpp::ParameterValue(0.75));
+  declareParameter("source_frame_filter_radius", rclcpp::ParameterValue(0.0));
   declareParameter("max_cloud_age", rclcpp::ParameterValue(0.5));
   declareParameter("analysis_z_min", rclcpp::ParameterValue(-1.0));
   declareParameter("analysis_z_max", rclcpp::ParameterValue(2.0));
@@ -93,6 +100,12 @@ void TraversabilityLayer::readParameters()
   node->get_parameter(name_ + ".pointcloud_topic", pointcloud_topic_);
   node->get_parameter(name_ + ".target_frame", target_frame_);
   node->get_parameter(name_ + ".transform_tolerance", transform_tolerance_);
+  node->get_parameter(name_ + ".processing_frequency", processing_frequency_);
+  node->get_parameter(name_ + ".point_subsample_step", point_subsample_step_);
+  node->get_parameter(name_ + ".max_points_per_update", max_points_per_update_);
+  node->get_parameter(name_ + ".max_raw_points_per_update", max_raw_points_per_update_);
+  node->get_parameter(name_ + ".source_frame_filter_margin", source_frame_filter_margin_);
+  node->get_parameter(name_ + ".source_frame_filter_radius", source_frame_filter_radius_);
   node->get_parameter(name_ + ".max_cloud_age", max_cloud_age_);
   node->get_parameter(name_ + ".analysis_z_min", analysis_z_min_);
   node->get_parameter(name_ + ".analysis_z_max", analysis_z_max_);
@@ -131,6 +144,12 @@ void TraversabilityLayer::readParameters()
   if (target_frame_.empty()) {
     target_frame_ = layered_costmap_->getGlobalFrameID();
   }
+  processing_frequency_ = std::max(0.1, processing_frequency_);
+  point_subsample_step_ = std::max(1, point_subsample_step_);
+  max_points_per_update_ = std::max(1, max_points_per_update_);
+  max_raw_points_per_update_ = std::max(1, max_raw_points_per_update_);
+  source_frame_filter_margin_ = std::max(0.0, source_frame_filter_margin_);
+  source_frame_filter_radius_ = std::max(0.0, source_frame_filter_radius_);
   ground_percentile_ = clamp01(ground_percentile_);
   ground_cluster_percentile_ = clamp01(ground_cluster_percentile_);
   ground_cluster_tolerance_ = std::max(0.01, ground_cluster_tolerance_);
@@ -162,6 +181,7 @@ void TraversabilityLayer::onInitialize()
   matchSize();
   resetLayerCostmap();
   last_decay_stamp_ = clock_->now();
+  last_processing_stamp_ = rclcpp::Time(0, 0, clock_->get_clock_type());
   current_ = false;
 
   pointcloud_sub_ = node->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -170,8 +190,10 @@ void TraversabilityLayer::onInitialize()
 
   RCLCPP_INFO(
     logger_,
-    "TraversabilityLayer [%s] subscribed to [%s], target_frame=[%s], reset_each_update=%s, decay_enabled=%s, decay_rate_per_second=%.3f",
+    "TraversabilityLayer [%s] subscribed to [%s], target_frame=[%s], processing_frequency=%.2fHz, point_subsample_step=%d, max_points_per_update=%d, max_raw_points_per_update=%d, source_frame_filter_radius=%.2fm, reset_each_update=%s, decay_enabled=%s, decay_rate_per_second=%.3f",
     name_.c_str(), pointcloud_topic_.c_str(), target_frame_.c_str(),
+    processing_frequency_, point_subsample_step_, max_points_per_update_, max_raw_points_per_update_,
+    source_frame_filter_radius_,
     reset_each_update_ ? "true" : "false",
     decay_enabled_ ? "true" : "false", decay_rate_per_second_);
 }
@@ -199,6 +221,7 @@ void TraversabilityLayer::reset()
   resetLayerCostmap();
   has_last_bounds_ = false;
   last_decay_stamp_ = clock_->now();
+  last_processing_stamp_ = rclcpp::Time(0, 0, clock_->get_clock_type());
   current_ = false;
 }
 
@@ -444,6 +467,17 @@ void TraversabilityLayer::includeFullLayerBounds(
   *max_y = std::max(*max_y, world_max_y);
 }
 
+// Throttle heavy terrain analysis so Nav2's controller thread is not starved by point cloud work.
+bool TraversabilityLayer::shouldProcessNow() const
+{
+  if (last_processing_stamp_.nanoseconds() == 0) {
+    return true;
+  }
+
+  const double period = 1.0 / processing_frequency_;
+  return (clock_->now() - last_processing_stamp_).seconds() >= period;
+}
+
 // Transform the latest point cloud into per-cell terrain statistics and costs.
 bool TraversabilityLayer::processLatestCloud(
   double * min_x, double * min_y, double * max_x, double * max_y)
@@ -455,6 +489,12 @@ bool TraversabilityLayer::processLatestCloud(
   }
 
   decayStoredCosts(min_x, min_y, max_x, max_y);
+
+  if (!shouldProcessNow()) {
+    includePreviousBounds(min_x, min_y, max_x, max_y);
+    current_ = true;
+    return false;
+  }
 
   if (!cloud) {
     current_ = false;
@@ -479,6 +519,7 @@ bool TraversabilityLayer::processLatestCloud(
     current_ = false;
     return false;
   }
+  last_processing_stamp_ = clock_->now();
 
   geometry_msgs::msg::TransformStamped transform;
   const std::string source_frame = cloud->header.frame_id;
@@ -497,6 +538,8 @@ bool TraversabilityLayer::processLatestCloud(
     current_ = false;
     return false;
   }
+  tf2::Transform cloud_to_costmap;
+  tf2::fromMsg(transform.transform, cloud_to_costmap);
 
   if (reset_each_update_) {
     resetLayerCostmap();
@@ -515,39 +558,70 @@ bool TraversabilityLayer::processLatestCloud(
   sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud, "x");
   sensor_msgs::PointCloud2ConstIterator<float> iter_y(*cloud, "y");
   sensor_msgs::PointCloud2ConstIterator<float> iter_z(*cloud, "z");
-  for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+  int skipped_points = 0;
+  int accepted_points = 0;
+  const bool can_prefilter_in_body_frame =
+    source_frame == "body" || source_frame == "base_link" || source_frame == "motion_link";
+  // A rolling local costmap can use its own window as the prefilter boundary. A large global
+  // costmap needs an explicit radius, otherwise every local cloud point is considered even when
+  // only nearby terrain should refresh the persistent global traversability layer.
+  const double source_filter_half_x = source_frame_filter_radius_ > 0.0 ?
+    source_frame_filter_radius_ :
+    0.5 * static_cast<double>(getSizeInCellsX()) * getResolution() + source_frame_filter_margin_;
+  const double source_filter_half_y = source_frame_filter_radius_ > 0.0 ?
+    source_frame_filter_radius_ :
+    0.5 * static_cast<double>(getSizeInCellsY()) * getResolution() + source_frame_filter_margin_;
+  for (int point_index = 0; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z, ++point_index) {
+    if (point_index >= max_raw_points_per_update_) {
+      break;
+    }
+    if ((point_index % point_subsample_step_) != 0) {
+      continue;
+    }
+    if (accepted_points >= max_points_per_update_) {
+      break;
+    }
     if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) || !std::isfinite(*iter_z)) {
       continue;
     }
+    // FAST-LIO publishes a body-frame local cloud for this robot. For a rolling local costmap,
+    // points far outside the local window cannot affect MPPI, so reject them before TF math.
+    if (can_prefilter_in_body_frame &&
+      (std::abs(*iter_x) > source_filter_half_x || std::abs(*iter_y) > source_filter_half_y))
+    {
+      ++skipped_points;
+      continue;
+    }
 
-    geometry_msgs::msg::PointStamped point_in;
-    geometry_msgs::msg::PointStamped point_out;
-    point_in.header = cloud->header;
-    point_in.point.x = *iter_x;
-    point_in.point.y = *iter_y;
-    point_in.point.z = *iter_z;
-    tf2::doTransform(point_in, point_out, transform);
+    const tf2::Vector3 point_out = cloud_to_costmap * tf2::Vector3(*iter_x, *iter_y, *iter_z);
 
-    if (point_out.point.z < analysis_z_min_ || point_out.point.z > analysis_z_max_) {
+    if (point_out.z() < analysis_z_min_ || point_out.z() > analysis_z_max_) {
+      ++skipped_points;
       continue;
     }
 
     unsigned int mx = 0;
     unsigned int my = 0;
-    if (!worldToMap(point_out.point.x, point_out.point.y, mx, my)) {
+    if (!worldToMap(point_out.x(), point_out.y(), mx, my)) {
+      ++skipped_points;
       continue;
     }
 
     column_z[static_cast<size_t>(index2d(static_cast<int>(mx), static_cast<int>(my), width))]
-      .push_back(point_out.point.z);
-    obs_min_x = std::min(obs_min_x, point_out.point.x);
-    obs_min_y = std::min(obs_min_y, point_out.point.y);
-    obs_max_x = std::max(obs_max_x, point_out.point.x);
-    obs_max_y = std::max(obs_max_y, point_out.point.y);
+      .push_back(point_out.z());
+    obs_min_x = std::min(obs_min_x, point_out.x());
+    obs_min_y = std::min(obs_min_y, point_out.y());
+    obs_max_x = std::max(obs_max_x, point_out.x());
+    obs_max_y = std::max(obs_max_y, point_out.y());
     has_observation = true;
+    ++accepted_points;
   }
 
   if (!has_observation) {
+    RCLCPP_DEBUG_THROTTLE(
+      logger_, *clock_, 2000,
+      "TraversabilityLayer [%s] produced no local observations after filtering; skipped_points=%d",
+      name_.c_str(), skipped_points);
     current_ = false;
     return false;
   }

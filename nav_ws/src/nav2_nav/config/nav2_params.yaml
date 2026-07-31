@@ -69,7 +69,7 @@ bt_navigator_navigate_to_pose_rclcpp_node:
 controller_server:
   ros__parameters:
     use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
-    controller_frequency: 10.0           # 控制器主循环频率，单位 Hz；当前点云/定位链路约 5Hz，10Hz 可避免 MPPI 在低性能仿真中过载
+    controller_frequency: 5.0            # 控制器主循环频率，单位 Hz；与当前定位/点云约 5Hz 对齐，避免 MPPI 与局部 costmap 抢 CPU
     min_x_velocity_threshold: 0.001      # 低于该值的 x 速度视为 0，避免数值噪声
     min_y_velocity_threshold: 0.5        # 低于该值的 y 速度视为 0；当前 DiffDrive 实际不会输出 y
     min_theta_velocity_threshold: 0.001  # 低于该值的角速度视为 0
@@ -92,9 +92,9 @@ controller_server:
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"  # 官方 MPPI 局部控制器
       motion_model: "DiffDrive"       # 运动学模型；当前按差速/不可横移模型处理
-      time_steps: 25                  # 单条候选轨迹的离散步数；降低后减少每次 MPPI 优化耗时
-      model_dt: 0.10                  # 相邻离散步时间间隔，单位 s；与 10Hz controller_frequency 对齐
-      batch_size: 250                 # 每轮采样的候选控制序列数量；避免 footprint critic 下 controller 回调长时间卡死
+      time_steps: 15                  # 单条候选轨迹的离散步数；15*0.20s 约 3s 预测时域
+      model_dt: 0.20                  # 相邻离散步时间间隔，单位 s；与 5Hz controller_frequency 对齐
+      batch_size: 200                 # 每轮采样的候选控制序列数量；降低 MPPI 单周期计算量
       iteration_count: 1              # 每次控制求解的优化迭代次数
       prune_distance: 1.7             # 从全局路径头部裁剪已通过路径的距离，单位 m
       transform_tolerance: 0.2        # TF 查询容差，单位 s
@@ -179,8 +179,8 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0               # 局部代价地图更新频率，单位 Hz
-      publish_frequency: 2.0              # 局部代价地图发布频率，单位 Hz
+      update_frequency: 2.0               # 局部代价地图更新频率，单位 Hz；traversability 为 1.5Hz，局部 costmap 不需要跟 MPPI 一样跑满 5Hz
+      publish_frequency: 1.0              # 局部代价地图发布频率，单位 Hz；降低 RViz/序列化开销，不影响控制器读取内部 costmap
       global_frame: odom                  # 局部代价地图所处坐标系，通常使用 odom
       robot_base_frame: body              # 机器人本体坐标系；直接接入 odom -> camera_init -> body 定位链
       use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
@@ -190,7 +190,7 @@ local_costmap:
       resolution: 0.05                    # 栅格分辨率，单位 m/cell
       # robot_radius: 0.28                # 圆形机器人模型；启用 footprint 后不要同时启用
       footprint: "[[0.30, 0.225], [0.30, -0.225], [-0.30, -0.225], [-0.30, 0.225]]" # 矩形 footprint，单位 m；当前为长 0.60m、宽 0.45m
-      plugins: ["inflation_layer"]          # 局部地图插件顺序；临时不加载 traversability_layer，用于隔离 MPPI 无速度/回调卡死问题
+      plugins: ["traversability_layer", "inflation_layer"]  # 局部地图插件顺序；重新启用 traversability_layer，提供动态避障/台阶可通行性
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"  # 障碍膨胀层
         cost_scaling_factor: 5.0                   # 膨胀代价衰减斜率，越大衰减越快
@@ -200,10 +200,15 @@ local_costmap:
         enabled: True                    # 是否启用该层
         pointcloud_topic: /cloud_registered_body_1  # 输入地形点云话题
         transform_to_costmap_frame: True # 是否先将点云转换到 costmap 坐标系再处理
+        processing_frequency: 1.5        # 地形分析频率，单位 Hz；低于 costmap 更新频率以避免阻塞 MPPI
+        point_subsample_step: 8          # 点云降采样步长；8 表示每 8 个点取 1 个，保留局部地形形态同时降计算量
+        max_points_per_update: 6000      # 单次最多处理的有效局部点数，防止大点云让 controller_server 长时间占锁
+        max_raw_points_per_update: 50000 # 单次最多扫描的原始点数；局部窗口有效点少时也不会扫完整帧点云
+        source_frame_filter_margin: 0.75 # body/base_link 点云预过滤边界，局部地图半宽外再保留该余量，单位 m
         max_cloud_age: 0.5               # 点云最大允许延迟，超过则认为过旧，单位 s
         analysis_z_min: -1.0             # 参与分析的最低 z，高于该范围外的点会被忽略
         analysis_z_max: 2.0              # 参与分析的最高 z
-        min_points_per_cell: 4           # 每个栅格至少需要多少点才进行有效地形评估
+        min_points_per_cell: 2           # 降采样后每格至少需要的点数；2 可保留稀疏局部点云的台阶/障碍判断
         ground_estimation_method: upper_densest # 地面估计方式；适合过滤拼接点云下方重影层
         ground_percentile: 0.20          # 地面估计使用 z 分布的 20% 分位点
         ground_cluster_tolerance: 0.05   # Z 聚类间隔，单位 m
@@ -238,8 +243,8 @@ local_costmap:
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 2.0               # 全局代价地图更新频率，单位 Hz
-      publish_frequency: 2.0              # 全局代价地图发布频率，单位 Hz
+      update_frequency: 0.5               # 全局代价地图更新频率，单位 Hz；全局 traversability 只做低频持久更新，避免抢占局部控制算力
+      publish_frequency: 0.5              # 全局代价地图发布频率，单位 Hz；降低大地图发布/序列化开销
       global_frame: map                   # 全局代价地图坐标系，必须与规划器一致
       robot_base_frame: body              # 机器人本体坐标系；直接接入 map/odom -> body 定位链
       use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
@@ -247,12 +252,18 @@ global_costmap:
       footprint: "[[0.30, 0.225], [0.30, -0.225], [-0.30, -0.225], [-0.30, 0.225]]" # 矩形 footprint，单位 m；当前为长 0.60m、宽 0.45m
       resolution: 0.05                    # 全局地图分辨率
       track_unknown_space: true           # 是否保留未知区域语义；全局规划通常建议开启
-      plugins: ["static_layer", "inflation_layer"] # 全局代价地图插件顺序；全局层先只使用 2D 静态地图，地形实时约束交给局部 costmap
+      plugins: ["static_layer", "traversability_layer", "inflation_layer"] # 全局代价地图插件顺序；静态地图作为底图，低频 traversability 写入全局地形代价，再做膨胀
       traversability_layer:
         plugin: "nav2_traversability_layer::TraversabilityLayer"  # 同一可通行性层，用于全局规划
         enabled: True                    # 是否启用
         pointcloud_topic: /cloud_registered_body_1  # 输入点云
         transform_to_costmap_frame: True # 是否先变换到 map frame 再处理
+        processing_frequency: 0.4        # 全局地形分析频率，单位 Hz；只做慢速全局记忆，不参与高频避障闭环
+        point_subsample_step: 16         # 全局层更强降采样，降低大地图更新成本
+        max_points_per_update: 3000      # 单次最多写入的有效全局地形点数
+        max_raw_points_per_update: 30000 # 单次最多扫描的原始点数，避免大点云导致 planner_server 卡顿
+        source_frame_filter_radius: 8.0  # 在 body/base_link/motion_link 点云源下，只接收机器人周围该半径内点云，单位 m
+        source_frame_filter_margin: 0.0  # 使用显式半径时不再依赖 costmap 尺寸扩边
         max_cloud_age: 1.0               # 全局层允许更老一点的点云，单位 s
         analysis_z_min: -1.0             # 参与分析的最低 z
         analysis_z_max: 2.0              # 参与分析的最高 z
@@ -293,7 +304,7 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"  # 全局膨胀层
         cost_scaling_factor: 5.0                   # 膨胀代价衰减斜率
         inflation_radius: 0.35                     # 膨胀半径
-      always_send_full_costmap: True               # 每次完整发布全局 costmap
+      always_send_full_costmap: False              # 只发布增量更新，降低全局大地图发布开销
 
 map_server:
   ros__parameters:

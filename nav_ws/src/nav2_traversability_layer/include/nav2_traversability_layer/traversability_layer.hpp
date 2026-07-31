@@ -62,6 +62,8 @@ private:
   void pointCloudCallback(sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
   // Convert the latest point cloud into traversability costs for this layer.
   bool processLatestCloud(double * min_x, double * min_y, double * max_x, double * max_y);
+  // Return true when the configured processing rate allows another full terrain update.
+  bool shouldProcessNow() const;
   // Estimate the local ground height from the per-cell z distribution.
   double estimateGroundZ(std::vector<double> & z_values) const;
   // Convert per-cell terrain statistics into a nav2 cost value.
@@ -90,6 +92,12 @@ private:
   std::string pointcloud_topic_;
   std::string target_frame_;
   double transform_tolerance_{0.05};
+  double processing_frequency_{2.0};
+  int point_subsample_step_{4};
+  int max_points_per_update_{12000};
+  int max_raw_points_per_update_{60000};
+  double source_frame_filter_margin_{0.75};
+  double source_frame_filter_radius_{0.0};
   double max_cloud_age_{0.5};
   double analysis_z_min_{-1.0};
   double analysis_z_max_{2.0};
@@ -131,6 +139,7 @@ private:
   double last_max_x_{0.0};
   double last_max_y_{0.0};
   rclcpp::Time last_decay_stamp_;
+  rclcpp::Time last_processing_stamp_;
 };
 
 }  // namespace nav2_traversability_layer

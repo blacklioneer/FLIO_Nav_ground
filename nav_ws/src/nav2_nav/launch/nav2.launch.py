@@ -25,7 +25,10 @@ def generate_launch_description():
         'map', default=os.path.join(nav2_nav_dir, 'maps', 'test_map.yaml'))
     nav2_param_path = launch.substitutions.LaunchConfiguration(
         'params_file', default=os.path.join(nav2_nav_dir, 'config', 'nav2_params.yaml'))
-    shutdown_timeout = '4.0'
+    # Nav2 composed container unloads MPPI/costmap plugins during shutdown; with traversability
+    # enabled this can take longer than the launch default. Give Ctrl+C enough time to cancel
+    # actions and publish zero velocity before SIGTERM/SIGKILL escalation.
+    shutdown_timeout = '15.0'
 
     return launch.LaunchDescription([
         # =========================================================
