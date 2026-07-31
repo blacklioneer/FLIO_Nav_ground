@@ -6,8 +6,74 @@
 #include "nav2_core/exceptions.hpp"
 #include "nav2_custom_planner/nav2_custom_planner.hpp"
 #include "nav2_util/line_iterator.hpp"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2/utils.h"
 
 namespace nav2_custom_planner {
+
+namespace {
+
+// Build a strictly planar pose for Nav2 local controllers.
+// The localization stack publishes a 3D body pose, but MPPI/DiffDrive consumes
+// x/y/yaw; keeping z, roll or pitch in the path can make tracking and goal
+// checks inconsistent with the 2D costmaps.
+geometry_msgs::msg::PoseStamped makePlanPose(
+    double x,
+    double y,
+    double yaw,
+    const rclcpp::Time & stamp,
+    const std::string & frame_id) {
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header.stamp = stamp;
+  pose.header.frame_id = frame_id;
+  pose.pose.position.x = x;
+  pose.pose.position.y = y;
+  pose.pose.position.z = 0.0;
+
+  tf2::Quaternion q;
+  q.setRPY(0.0, 0.0, yaw);
+  pose.pose.orientation.x = q.x();
+  pose.pose.orientation.y = q.y();
+  pose.pose.orientation.z = q.z();
+  pose.pose.orientation.w = q.w();
+  return pose;
+}
+
+// Assign yaw-only orientations along the path direction.
+// MPPI primarily follows geometry here, but coherent path yaw helps prevent
+// accidental use of the 3D start/goal quaternion from localization/RViz.
+void normalizePathFor2D(
+    std::vector<geometry_msgs::msg::PoseStamped> & path,
+    const geometry_msgs::msg::PoseStamped & start,
+    const geometry_msgs::msg::PoseStamped & goal,
+    const rclcpp::Time & stamp,
+    const std::string & frame_id) {
+  if (path.empty()) {
+    return;
+  }
+
+  path.front() = makePlanPose(
+      start.pose.position.x,
+      start.pose.position.y,
+      tf2::getYaw(start.pose.orientation),
+      stamp,
+      frame_id);
+  path.back() = makePlanPose(
+      goal.pose.position.x,
+      goal.pose.position.y,
+      tf2::getYaw(goal.pose.orientation),
+      stamp,
+      frame_id);
+
+  for (size_t i = 0; i + 1 < path.size(); ++i) {
+    const double dx = path[i + 1].pose.position.x - path[i].pose.position.x;
+    const double dy = path[i + 1].pose.position.y - path[i].pose.position.y;
+    const double yaw = std::hypot(dx, dy) > 1e-6 ? std::atan2(dy, dx) : tf2::getYaw(path[i].pose.orientation);
+    path[i] = makePlanPose(path[i].pose.position.x, path[i].pose.position.y, yaw, stamp, frame_id);
+  }
+}
+
+}  // namespace
 
 // Configure planner state and expose the key traversability tuning parameters.
 void CustomPlanner::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent, std::string name,
@@ -144,11 +210,9 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
   if (path_found && current_node != nullptr) {
     std::vector<geometry_msgs::msg::PoseStamped> reverse_path;
     while (current_node != nullptr) {
-      geometry_msgs::msg::PoseStamped pose; double wx, wy;
+      double wx, wy;
       costmap_->mapToWorld(current_node->x, current_node->y, wx, wy);
-      pose.pose.position.x = wx; pose.pose.position.y = wy; pose.pose.position.z = 0.0;
-      pose.header.stamp = plan_stamp; pose.header.frame_id = global_frame_;
-      reverse_path.push_back(pose);
+      reverse_path.push_back(makePlanPose(wx, wy, 0.0, plan_stamp, global_frame_));
       current_node = current_node->parent;
     }
     std::reverse(reverse_path.begin(), reverse_path.end());
@@ -191,13 +255,9 @@ nav_msgs::msg::Path CustomPlanner::createPlan(const geometry_msgs::msg::PoseStam
       global_path.poses = reverse_path; 
     }
 
-    // Preserve exact start/goal poses while normalizing headers to the path time/frame.
-    global_path.poses.front().pose = start.pose;
-    global_path.poses.front().header.stamp = plan_stamp;
-    global_path.poses.front().header.frame_id = global_frame_;
-    global_path.poses.back().pose = goal.pose;
-    global_path.poses.back().header.stamp = plan_stamp;
-    global_path.poses.back().header.frame_id = global_frame_;
+    // Preserve exact start/goal x/y while forcing all path poses to 2D
+    // x/y/yaw. This keeps the data contract clean for MPPI and 2D costmaps.
+    normalizePathFor2D(global_path.poses, start, goal, plan_stamp, global_frame_);
     return global_path;
 
   } else {

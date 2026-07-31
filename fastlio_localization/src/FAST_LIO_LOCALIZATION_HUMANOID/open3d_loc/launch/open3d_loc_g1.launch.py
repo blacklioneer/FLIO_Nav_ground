@@ -12,9 +12,10 @@ def generate_launch_description():
     # 声明 use_sim_time 参数
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
-        default_value='false',
+        default_value='true',
         description='Use simulation time'
     )
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     # 配置文件路径
     config_file = PathJoinSubstitution([
@@ -31,13 +32,8 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_init2odom',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
-    )
-    static_tf_camera_init2odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='camera_init2odom',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init'],
+        parameters=[{'use_sim_time': use_sim_time}]
     )
     # 静态TF发布节点 - imu_link to base_link
     # 父frame是imu_link，子frame是base_link
@@ -55,7 +51,8 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='base_center_broadcaster',
         arguments=['0', '0', '0', '0', '0', '0',
-                   '1', 'base_link', 'motion_link']
+                   '1', 'base_link', 'motion_link'],
+        parameters=[{'use_sim_time': use_sim_time}]
     )
 
     # 静态TF发布节点 - body to base_link
@@ -64,7 +61,8 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='body_to_base_link',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'body', 'base_link']
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'body', 'base_link'],
+        parameters=[{'use_sim_time': use_sim_time}]
     )
 
     # 全局定位节点
@@ -98,7 +96,7 @@ def generate_launch_description():
                 # 'kalman_estimatedMeasVar2': 0.02,
                 # 'confidence_loc_th': 0.7,
                 # 'dis_updatemap': 3.5,
-                # 'use_sim_time': LaunchConfiguration('use_sim_time')
+                # 'use_sim_time': use_sim_time
                 'path_map': map_file,
                 'pcd_queue_maxsize': 10,
                 'voxelsize_coarse': 0.02,# 增大粗配准体素大小，大幅降低初始匹配时的 CPU 计算量
@@ -115,7 +113,7 @@ def generate_launch_description():
                 'kalman_estimatedMeasVar2': 0.02,
                 'confidence_loc_th': 0.7,
                 'dis_updatemap': 3.5,
-                'use_sim_time': LaunchConfiguration('use_sim_time')
+                'use_sim_time': use_sim_time
             }
         ]
     )
@@ -137,7 +135,7 @@ def generate_launch_description():
             'max_global_points': 1000000,
             'map_publish_frequency': 1.0,
             'enable_global_map': True,
-            'use_sim_time': LaunchConfiguration('use_sim_time')
+            'use_sim_time': use_sim_time
         }]
     )
 
@@ -162,6 +160,7 @@ def generate_launch_description():
             'range_min': 0.3,                 # 过滤掉雷达近处的车体反光盲区
             'range_max': 20.0,                # 最大探测距离
             'use_inf': True,
+            'use_sim_time': use_sim_time
         }]
     )
 

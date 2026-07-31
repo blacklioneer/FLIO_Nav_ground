@@ -23,7 +23,7 @@ def generate_launch_description():
     rviz_cfg = LaunchConfiguration('rviz_cfg')
 
     declare_use_sim_time_cmd = DeclareLaunchArgument(
-        'use_sim_time', default_value='false',
+        'use_sim_time', default_value='true',
         description='Use simulation (Gazebo) clock if true'
     )
     declare_config_path_cmd = DeclareLaunchArgument(
@@ -55,6 +55,7 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         arguments=['-d', rviz_cfg],
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(rviz_use)
     )
 

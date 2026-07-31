@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import launch
 import launch_ros.actions
-from launch.actions import TimerAction, LogInfo
+from launch.actions import DeclareLaunchArgument, TimerAction, LogInfo
+from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     target_pkg = "wheel_controller"
+    use_sim_time = LaunchConfiguration("use_sim_time", default="false")
+    respawn = LaunchConfiguration("respawn", default="true")
+    shutdown_timeout = "2.0"
 
     # ==================== 1. 丝杠电机节点 ====================
     lead_screw_motor_node = launch_ros.actions.Node(
@@ -12,9 +16,11 @@ def generate_launch_description():
         executable="lead_screw_motor_node",
         name="lead_screw_motor_node",
         output="screen",
-        parameters=[{"use_sim_time": False}],
-        respawn=True,           
-        respawn_delay=2.0       
+        parameters=[{"use_sim_time": use_sim_time}],
+        respawn=respawn,
+        respawn_delay=2.0,
+        sigterm_timeout=shutdown_timeout,
+        sigkill_timeout=shutdown_timeout
     )
 
     # ==================== 2. 底盘控制节点 ====================
@@ -23,9 +29,11 @@ def generate_launch_description():
         executable="wheel_controller_node",
         name="wheel_controller_node",
         output="screen",
-        parameters=[{"use_sim_time": False}],
-        respawn=True,           
-        respawn_delay=2.0
+        parameters=[{"use_sim_time": use_sim_time}],
+        respawn=respawn,
+        respawn_delay=2.0,
+        sigterm_timeout=shutdown_timeout,
+        sigkill_timeout=shutdown_timeout
     )
 
     # ==================== 3. 危险指令节点 ====================
@@ -34,9 +42,11 @@ def generate_launch_description():
         executable="danger_command_node",
         name="danger_command_node",
         output="screen",
-        parameters=[{"use_sim_time": False}],
-        respawn=True,           
-        respawn_delay=2.0
+        parameters=[{"use_sim_time": use_sim_time}],
+        respawn=respawn,
+        respawn_delay=2.0,
+        sigterm_timeout=shutdown_timeout,
+        sigkill_timeout=shutdown_timeout
     )
 
     # ==================== 4. 状态发布节点 ====================
@@ -45,7 +55,9 @@ def generate_launch_description():
         executable="state_publisher_node",
         name="state_publisher_node",
         output="screen",
-        parameters=[{"use_sim_time": False}]
+        parameters=[{"use_sim_time": use_sim_time}],
+        sigterm_timeout=shutdown_timeout,
+        sigkill_timeout=shutdown_timeout
     )
 
     # ==================== 终极防崩溃：绝对时间轴延迟启动 ====================
@@ -76,6 +88,16 @@ def generate_launch_description():
     )
 
     return launch.LaunchDescription([
+        DeclareLaunchArgument(
+            "use_sim_time",
+            default_value="false",
+            description="Use ROS simulation time for wheel_control nodes. Set true only when /clock is available."
+        ),
+        DeclareLaunchArgument(
+            "respawn",
+            default_value="true",
+            description="Respawn hardware nodes after runtime crashes. Set false for clean Ctrl+C shutdown/debugging."
+        ),
         LogInfo(msg=">>> 开始底层硬件节点顺序拉起序列 (绝对时间轴模式) <<<"),
         lead_screw_motor_node,   # T=0s 启动
         delay_wheel_controller,  # T=3s 启动

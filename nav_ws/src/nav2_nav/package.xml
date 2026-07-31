@@ -15,6 +15,10 @@
   <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>nav2_custom_planner</exec_depend>
   <exec_depend>nav2_traversability_layer</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

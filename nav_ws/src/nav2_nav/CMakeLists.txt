@@ -20,8 +20,13 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-install(DIRECTORY launch maps config rviz
+install(DIRECTORY launch maps config rviz behavior_trees
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/nav2_shutdown_guard.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()

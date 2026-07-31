@@ -1,23 +1,30 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument # <--- 新增导入 DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.substitutions import PathJoinSubstitution, LaunchConfiguration # <--- 新增导入 LaunchConfiguration
-from launch.conditions import IfCondition # 导入 IfCondition
+from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
+from launch.conditions import IfCondition
 import os
 
 
 def generate_launch_description():
     # ==========================================
-    # 1. 声明一个可以通过命令行传入的参数 'use_rviz'
+    # 1. 声明可以通过命令行传入的 launch 参数
     # ==========================================
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='true',
+        description='Use /clock simulation time for FAST-LIO, localization and RViz'
+    )
     use_rviz_arg = DeclareLaunchArgument(
         'use_rviz',
-        default_value='true',  # 默认值为 false（默认打开 RViz）
+        default_value='false',
         description='Whether to start RViz2'
     )
-    # 获取这个参数的当前值
+
+    # 获取参数当前值，统一传给所有会发布/消费时间戳的节点
+    use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
 
     # 获取包路径
@@ -32,7 +39,10 @@ def generate_launch_description():
                 'launch',
                 'mapping.launch.py'
             ])
-        ])
+        ]),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items()
     )
 
     # 包含 open3d_loc 的 launch 文件
@@ -43,7 +53,10 @@ def generate_launch_description():
                 'launch',
                 'open3d_loc_g1.launch.py'
             ])
-        ])
+        ]),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items()
     )
 
     # RViz 节点配置
@@ -60,6 +73,9 @@ def generate_launch_description():
         arguments=['-d', rviz_config_path],
         output='screen',
         prefix='nice',
+        parameters=[{
+            'use_sim_time': use_sim_time
+        }],
         # ==========================================
         # 2. RViz节点加上条件判断！
         # ==========================================
@@ -67,7 +83,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        use_rviz_arg,      # <--- 3.把声明的参数扔进 LaunchDescription 列表里
+        use_sim_time_arg,
+        use_rviz_arg,
         fast_lio_launch,
         open3d_loc_launch,
         rviz_node

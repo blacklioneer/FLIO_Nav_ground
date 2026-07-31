@@ -3,10 +3,11 @@ bt_navigator:
     use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     global_frame: map                # Nav2 全局参考坐标系，通常由定位系统发布 map->odom
     robot_base_frame: body           # 机器人本体坐标系；当前定位和点云都以 body 为机器人基坐标系
-    odom_topic: /Odometry_loc        # 里程计话题，供行为树和导航状态判断使用
+    odom_topic: /Odometry_loc        # 里程计话题；当前定位模块实际发布 /Odometry_loc
     bt_loop_duration: 100            # 行为树循环周期，单位 ms；100 表示 10Hz
     default_server_timeout: 20       # 行为树节点等待 action/server 响应的默认超时时间，单位 s
     wait_for_service_timeout: 1000   # 等待服务可用的超时时间，单位 ms
+    default_nav_to_pose_bt_xml: "$(find-pkg-share nav2_nav)/behavior_trees/navigate_to_pose_replan_if_invalid.xml" # 默认 NavigateToPose 行为树；只在路径失效或目标更新时重规划，避免高频重规划打断 MPPI
     # 行为树需要动态加载的 BT 插件库列表，基本保持 Nav2 默认全集
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
@@ -68,14 +69,16 @@ bt_navigator_navigate_to_pose_rclcpp_node:
 controller_server:
   ros__parameters:
     use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
-    controller_frequency: 20.0           # 控制器主循环频率，单位 Hz；MPPI 要求周期不能大于 model_dt
+    controller_frequency: 10.0           # 控制器主循环频率，单位 Hz；当前点云/定位链路约 5Hz，10Hz 可避免 MPPI 在低性能仿真中过载
     min_x_velocity_threshold: 0.001      # 低于该值的 x 速度视为 0，避免数值噪声
     min_y_velocity_threshold: 0.5        # 低于该值的 y 速度视为 0；当前 DiffDrive 实际不会输出 y
     min_theta_velocity_threshold: 0.001  # 低于该值的角速度视为 0
     failure_tolerance: 0.3               # 控制器短时失败容忍时间/距离阈值，防止偶发抖动直接触发失败
     progress_checker_plugin: "progress_checker"    # 使用的进度检测器名称
+    current_goal_checker: "general_goal_checker"    # 当前默认终点检测器，显式指定避免 controller_server 运行时警告
     goal_checker_plugins: ["general_goal_checker"] # 使用的终点判定器列表
     controller_plugins: ["FollowPath"]             # controller_server 加载的局部控制器插件列表
+    odom_topic: /Odometry_loc                      # MPPI/控制器使用的里程计话题；必须与系统实际发布的话题一致
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"  # 简单进度检测器
@@ -89,9 +92,9 @@ controller_server:
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"  # 官方 MPPI 局部控制器
       motion_model: "DiffDrive"       # 运动学模型；当前按差速/不可横移模型处理
-      time_steps: 40                  # 单条候选轨迹的离散步数
-      model_dt: 0.05                  # 相邻离散步时间间隔，单位 s；需 >= 1/controller_frequency
-      batch_size: 1000                # 每轮采样的候选控制序列数量
+      time_steps: 25                  # 单条候选轨迹的离散步数；降低后减少每次 MPPI 优化耗时
+      model_dt: 0.10                  # 相邻离散步时间间隔，单位 s；与 10Hz controller_frequency 对齐
+      batch_size: 250                 # 每轮采样的候选控制序列数量；避免 footprint critic 下 controller 回调长时间卡死
       iteration_count: 1              # 每次控制求解的优化迭代次数
       prune_distance: 1.7             # 从全局路径头部裁剪已通过路径的距离，单位 m
       transform_tolerance: 0.2        # TF 查询容差，单位 s
@@ -187,7 +190,7 @@ local_costmap:
       resolution: 0.05                    # 栅格分辨率，单位 m/cell
       # robot_radius: 0.28                # 圆形机器人模型；启用 footprint 后不要同时启用
       footprint: "[[0.30, 0.225], [0.30, -0.225], [-0.30, -0.225], [-0.30, 0.225]]" # 矩形 footprint，单位 m；当前为长 0.60m、宽 0.45m
-      plugins: ["traversability_layer", "inflation_layer"]  # 局部地图插件顺序
+      plugins: ["inflation_layer"]          # 局部地图插件顺序；临时不加载 traversability_layer，用于隔离 MPPI 无速度/回调卡死问题
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"  # 障碍膨胀层
         cost_scaling_factor: 5.0                   # 膨胀代价衰减斜率，越大衰减越快
@@ -244,7 +247,7 @@ global_costmap:
       footprint: "[[0.30, 0.225], [0.30, -0.225], [-0.30, -0.225], [-0.30, 0.225]]" # 矩形 footprint，单位 m；当前为长 0.60m、宽 0.45m
       resolution: 0.05                    # 全局地图分辨率
       track_unknown_space: true           # 是否保留未知区域语义；全局规划通常建议开启
-      plugins: ["static_layer", "traversability_layer", "inflation_layer"] # 全局代价地图插件顺序
+      plugins: ["static_layer", "inflation_layer"] # 全局代价地图插件顺序；全局层先只使用 2D 静态地图，地形实时约束交给局部 costmap
       traversability_layer:
         plugin: "nav2_traversability_layer::TraversabilityLayer"  # 同一可通行性层，用于全局规划
         enabled: True                    # 是否启用
@@ -299,7 +302,7 @@ map_server:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0    # 期望全局规划频率，单位 Hz
+    expected_planner_frequency: 5.0      # 期望全局规划频率，单位 Hz；自定义 A* + traversability 实测约 5-10Hz，避免 20Hz 下持续 miss rate
     use_sim_time: True                  # 统一由 nav2.launch.py 的 use_sim_time 参数覆盖；仿真为 True，真机无 /clock 时为 False
     planner_plugins: ["GridBased"]      # 加载的全局规划器列表
     GridBased:
@@ -370,7 +373,7 @@ velocity_smoother:
     min_velocity: [-0.01, 0.0, -1.0]    # [vx, vy, wz] 最小速度限制
     max_accel: [2.5, 0.0, 3.2]          # [vx, vy, wz] 最大加速度限制
     max_decel: [-2.5, 0.0, -3.2]        # [vx, vy, wz] 最大减速度限制（负值）
-    odom_topic: "/Odometry_loc"         # 速度平滑器使用的里程计话题
+    odom_topic: "/Odometry_loc"         # 速度平滑器使用的里程计话题；当前定位模块实际发布 /Odometry_loc
     odom_duration: 0.1                  # 里程计历史缓存时长，单位 s
     deadband_velocity: [0.0, 0.0, 0.0]  # 死区速度，小于该值直接置零
     velocity_timeout: 1.0               # 超过该时间未收到新速度命令则超时清零，单位 s

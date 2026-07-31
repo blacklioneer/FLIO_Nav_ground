@@ -18,13 +18,14 @@ def generate_launch_description():
     use_sim_time = launch.substitutions.LaunchConfiguration('use_sim_time', default='true')
     # 【新增】：控制是否启动 RViz 的开关，默认设置为 'False'
     use_rviz1 = launch.substitutions.LaunchConfiguration('use_rviz1', default='False')
+    log_level = launch.substitutions.LaunchConfiguration('log_level', default='info')
     
     # 读取你通过 pcd2pgm 保存的干净的 2D 栅格地图
     map_yaml_path = launch.substitutions.LaunchConfiguration(
         'map', default=os.path.join(nav2_nav_dir, 'maps', 'test_map.yaml'))
     nav2_param_path = launch.substitutions.LaunchConfiguration(
         'params_file', default=os.path.join(nav2_nav_dir, 'config', 'nav2_params.yaml'))
-    shutdown_timeout = '2.0'
+    shutdown_timeout = '4.0'
 
     return launch.LaunchDescription([
         # =========================================================
@@ -39,15 +40,33 @@ def generate_launch_description():
         # 声明 use_rviz1 参数，明确告诉用户这个参数的作用
         launch.actions.DeclareLaunchArgument('use_rviz1', default_value='False',
                                              description='Whether to start RViz2 on the robot (default: False for headless Jetson)'),
+        launch.actions.DeclareLaunchArgument('log_level', default_value='info',
+                                             description='Logging level for Nav2 component container, e.g. info or debug'),
         launch.actions.RegisterEventHandler(
             OnShutdown(
                 on_shutdown=[
-                    launch.actions.LogInfo(msg='Shutting down nav2_nav launch: map_server, Nav2 container, and RViz will be stopped.')
+                    launch.actions.LogInfo(msg='Shutting down nav2_nav launch: canceling Nav2 actions and publishing zero velocity.'),
+                    launch.actions.ExecuteProcess(
+                        cmd=['ros2', 'run', 'nav2_nav', 'nav2_shutdown_guard.py', '--once'],
+                        output='screen'
+                    )
                 ]
             )
         ),
         # Launch 级统一设置；各 Node 仍显式传入该参数，避免组合式启动或外部 include 漏掉。
         SetParameter(name='use_sim_time', value=use_sim_time),
+
+        # =========================================================
+        # 0.5. 退出保护：Ctrl+C 时取消 Nav2 action 并发布零速度
+        # =========================================================
+        Node(
+            package='nav2_nav',
+            executable='nav2_shutdown_guard.py',
+            name='nav2_shutdown_guard',
+            output='screen',
+            sigterm_timeout=shutdown_timeout,
+            sigkill_timeout=shutdown_timeout
+        ),
 
         # =========================================================
         # 1. 单独启动 Map Server (提供全局 2D 代价底图)
@@ -85,7 +104,7 @@ def generate_launch_description():
             name='nav2_container',
             output='screen',
             parameters=[nav2_param_path, {'autostart': True, 'use_sim_time': use_sim_time}],
-            arguments=['--ros-args', '--log-level', 'info'],
+            arguments=['--ros-args', '--log-level', log_level],
             remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')],
             sigterm_timeout=shutdown_timeout,
             sigkill_timeout=shutdown_timeout
